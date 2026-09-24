@@ -5,3 +5,7 @@ out/
 *.scw/
 models/
 .pytest_cache/
+audio/
+
+# Third-party decoder checkout (~8 GB, cloned separately — see README)
+external/

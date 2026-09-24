@@ -81,6 +81,16 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("-o", "--out", default=None)
     p_render.add_argument("--sr", type=int, default=None)
 
+    p_encode = sub.add_parser("encode", help="analyse audio and write a .sc file")
+    p_encode.add_argument("file")
+    p_encode.add_argument("-o", "--out", default=None)
+    p_encode.add_argument("--workdir", default=None)
+    p_encode.add_argument("--title", default=None)
+
+    p_serve = sub.add_parser("serve", help="local A/B listening server")
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8720)
+
     args = ap.parse_args(argv)
 
     try:
@@ -95,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
             count, secs = render_to_file(doc, out, args.sr)
             print(f"rendered {count} events -> {out}  ({secs:.2f}s @ "
                   f"{args.sr or doc.sample_rate} Hz)")
+            return 0
+
+        if args.cmd == "encode":
+            from .encode import encode
+
+            out = args.out or str(Path(args.file).with_suffix(".sc"))
+            encode(args.file, out, args.workdir, args.title)
+            return 0
+
+        if args.cmd == "serve":
+            from .server import serve
+
+            serve(args.host, args.port)
             return 0
     except ParseError as exc:
         print(f"parse error: {exc}", file=sys.stderr)
