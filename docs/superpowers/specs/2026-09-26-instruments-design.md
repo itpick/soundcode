@@ -146,7 +146,7 @@ New module `src/soundcode/render_sf.py`. The existing `render.py` stays as the `
 - Both thresholds are named constants, tuned with `compare`.
 
 **B2. Stricter note filtering** in `stage_notes_poly`:
-- basic-pitch's `onset_threshold` goes from 0.5 to 0.6, `frame_threshold` from 0.3 to 0.4, and `minimum_note_length` from 58 ms to 80 ms.
+- basic-pitch's `onset_threshold` goes from 0.5 to 0.6 and `frame_threshold` from 0.3 to 0.4. `minimum_note_length` stays at its default of 127.7 ms, which is already stricter than the 80 ms first proposed.
 - Overlapping notes of the same pitch merge into one.
 - The amplitude floor rises from 0.30 to 0.40 of the stem's peak.
 - These are starting values; the plan tunes them on the five test songs by note F1 in `compare`.
