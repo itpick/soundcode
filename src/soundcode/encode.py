@@ -37,6 +37,73 @@ def bend_to_cents(bend) -> float:
         return 0.0
     return (float(np.mean(bend)) - BASIC_PITCH_BEND_ZERO) * 100.0 / 3.0
 
+
+# Loudness gate: a 2 s block of a stem is transcribed only if it is above an
+# absolute floor AND within GATE_REL_DB of the full mix. Separation leaves
+# faint bleed in every stem; basic-pitch's floor is relative to the stem's own
+# peak, so a near-silent stem otherwise yields confident invented notes.
+GATE_ABS_DB = -50.0
+GATE_REL_DB = 35.0
+GATE_BLOCK_S = 2.0
+AMP_FLOOR = 0.40
+ONSET_THRESHOLD = 0.6
+FRAME_THRESHOLD = 0.4
+
+
+def _block_db(y: np.ndarray, sr: int) -> np.ndarray:
+    n = max(1, int(np.ceil(len(y) / (GATE_BLOCK_S * sr))))
+    out = np.full(n, -np.inf)
+    for i in range(n):
+        seg = y[int(i * GATE_BLOCK_S * sr): int((i + 1) * GATE_BLOCK_S * sr)]
+        r = float(np.sqrt(np.mean(np.square(seg, dtype=np.float64)))) if seg.size else 0.0
+        out[i] = 20 * math.log10(r) if r > 0 else -np.inf
+    return out
+
+
+def active_blocks(stem: np.ndarray, mix: np.ndarray, sr: int) -> np.ndarray:
+    s, m = _block_db(stem, sr), _block_db(mix, sr)
+    m = np.pad(m, (0, max(0, len(s) - len(m))), constant_values=-np.inf)[: len(s)]
+    return (s >= GATE_ABS_DB) & (s >= m - GATE_REL_DB)
+
+
+def active_level_db(stem: np.ndarray, mask: np.ndarray, sr: int) -> float | None:
+    parts = [stem[int(i * GATE_BLOCK_S * sr): int((i + 1) * GATE_BLOCK_S * sr)]
+             for i, on in enumerate(mask) if on]
+    if not parts:
+        return None
+    y = np.concatenate(parts)
+    r = float(np.sqrt(np.mean(np.square(y, dtype=np.float64))))
+    return 20 * math.log10(r) if r > 0 else None
+
+
+def merge_same_pitch(events: list[tuple]) -> list[tuple]:
+    out: list[list] = []
+    last: dict[int, int] = {}
+    for e in sorted(events, key=lambda e: e[0]):
+        start, end, midi, amp, bend = e
+        j = last.get(midi)
+        if j is not None and start <= out[j][1] + 0.03:
+            out[j][1] = max(out[j][1], end)
+            out[j][3] = max(out[j][3], amp)
+            continue
+        last[midi] = len(out)
+        out.append([start, end, midi, amp, bend])
+    return [tuple(e) for e in out]
+
+
+def vocal_stem_name(path: Path) -> str:
+    """`vocals` when encoder_stems fell back to lead+backing, else the lead stem."""
+    return "vocals" if Path(path).stem == "vocals" else "lead_vocals"
+
+
+def _stage_lines(st: "Stage") -> list[str]:
+    out = [f":{st.name}", f"meta    src={st.src}  conf={st.conf:.2f}"]
+    if st.stem:
+        level = f"  level={st.level_db:.1f}dB" if st.level_db is not None else ""
+        out.append(f"meta    stem={st.stem}{level}")
+    out += [f'meta    warn="{w}"' for w in st.warns]
+    return out + st.lines + [""]
+
 # Populated by separate_stems() when separation fails. Stem loss silently
 # costs us :notes.* and :text.* — the streams that matter most — so the reason
 # is recorded in the file rather than left to be inferred from absences.
@@ -60,6 +127,8 @@ class Stage:
     src: str = ""
     warns: list[str] = field(default_factory=list)
     ok: bool = False
+    stem: str = ""                # source stem, for the renderer and compare
+    level_db: float | None = None  # source stem RMS over its active blocks
 
 
 def _log(msg: str) -> None:
@@ -294,13 +363,22 @@ def stage_percussion(stem: Path | None, y: np.ndarray, sr: int, grid: dict) -> S
     if not grid:
         st.warns.append("no grid — percussion events need bar positions")
         return st
+    mask = None
     if stem is not None:
         d, _ = librosa.load(str(stem), sr=sr, mono=True)
+        st.stem = "drums"
+        mask = active_blocks(d, y.mean(0), sr)
+        st.level_db = active_level_db(d, mask, sr)
+        if not mask.any():
+            st.warns.append("stem silent (below the loudness gate throughout)")
+            return st
     else:
         d = y.mean(0)
         st.warns.append("no drum stem; onsets taken from the full mix")
 
     onsets = librosa.onset.onset_detect(y=d, sr=sr, units="time", backtrack=True)
+    if mask is not None:
+        onsets = [t for t in onsets if mask[min(int(t / GATE_BLOCK_S), len(mask) - 1)]]
     if not len(onsets):
         st.warns.append("no onsets found")
         return st
@@ -414,7 +492,8 @@ def stage_notes(stem: Path | None, name: str, sr: int, grid: dict,
 
 
 def stage_notes_poly(stem: Path | None, name: str, grid: dict,
-                     min_amp: float = 0.30) -> Stage:
+                     min_amp: float = AMP_FLOOR, mix: np.ndarray | None = None,
+                     sr: int = 44100, stem_name: str = "") -> Stage:
     """Polyphonic note transcription via basic-pitch.
 
     pyin is monophonic and returns noise on real polyphonic material — it was
@@ -433,12 +512,29 @@ def stage_notes_poly(stem: Path | None, name: str, grid: dict,
         return st
 
     try:
-        _, _, events = predict(str(stem))
+        _, _, events = predict(str(stem), onset_threshold=ONSET_THRESHOLD,
+                               frame_threshold=FRAME_THRESHOLD)
     except Exception as exc:                             # noqa: BLE001
         st.warns.append(f"basic-pitch failed: {exc}")
         return st
     if not events:
         st.warns.append("no notes detected")
+        return st
+
+    st.stem = stem_name
+    if mix is not None:
+        import librosa
+        y_stem, _ = librosa.load(str(stem), sr=sr, mono=True)
+        mask = active_blocks(y_stem, mix, sr)
+        st.level_db = active_level_db(y_stem, mask, sr)
+        if not mask.any():
+            st.warns = ["stem silent (below the loudness gate throughout)"]
+            return st
+        events = [e for e in events
+                  if mask[min(int(e[0] / GATE_BLOCK_S), len(mask) - 1)]]
+    events = merge_same_pitch(events)
+    if not events:
+        st.warns.append("no notes above the loudness gate")
         return st
 
     from .pitch import cents_to_name
@@ -585,20 +681,26 @@ def encode(path: str, out_path: str | None = None,
     # basic-pitch is polyphonic and vastly better on real material; pyin is
     # kept only as the fallback when it cannot be imported.
     _log("bass notes")
-    bass_st = stage_notes_poly(stems.get("bass"), "bass", grid)
+    mono_mix = y.mean(0)
+    bass_st = stage_notes_poly(stems.get("bass"), "bass", grid, mix=mono_mix, sr=sr,
+                               stem_name="bass")
     if not bass_st.ok:
         bass_st, _ = stage_notes(stems.get("bass"), "bass", sr, grid, "E1", "E4",
                                  "bass.electric")
     _log("vocal notes")
-    vox_st = stage_notes_poly(stems.get("vocals"), "vox", grid)
+    vox_st = stage_notes_poly(stems.get("vocals"), "vox", grid, mix=mono_mix, sr=sr,
+                              stem_name=vocal_stem_name(stems["vocals"]) if "vocals" in stems else "")
     if not vox_st.ok:
         vox_st, _ = stage_notes(stems.get("vocals"), "vox", sr, grid, "C2", "C6",
                                 "voice.lead")
     _log("other/harmony notes")
-    other_st = stage_notes_poly(stems.get("other"), "other", grid)
+    other_st = stage_notes_poly(stems.get("other"), "other", grid, mix=mono_mix, sr=sr,
+                                stem_name="other")
     _log("guitar/piano notes")
-    guitar_st = stage_notes_poly(stems.get("guitar"), "guitar", grid)
-    piano_st = stage_notes_poly(stems.get("piano"), "piano", grid)
+    guitar_st = stage_notes_poly(stems.get("guitar"), "guitar", grid, mix=mono_mix, sr=sr,
+                                 stem_name="guitar")
+    piano_st = stage_notes_poly(stems.get("piano"), "piano", grid, mix=mono_mix, sr=sr,
+                                stem_name="piano")
     _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid)
     _log("mix");       mix_st = stage_mix(y, sr)
 
@@ -646,12 +748,7 @@ def encode(path: str, out_path: str | None = None,
             if st.warns:
                 lines.append(f"# :{st.name} omitted — {'; '.join(st.warns)}")
             continue
-        lines.append(f":{st.name}")
-        lines.append(f"meta    src={st.src}  conf={st.conf:.2f}")
-        for w in st.warns:
-            lines.append(f'meta    warn="{w}"')
-        lines += st.lines
-        lines.append("")
+        lines += _stage_lines(st)
 
     text = "\n".join(lines) + "\n"
     dest = Path(out_path) if out_path else src.with_suffix(".sc")

@@ -126,7 +126,7 @@ def stem_for_stream(doc, name: str) -> str:
     from .separate import STEMS
 
     s = doc.stream(name)
-    if s is not None and s.meta.get("stem") in STEMS:
+    if s is not None and s.meta.get("stem") in (*STEMS, "vocals"):
         return s.meta["stem"]
     track = name.split(".", 1)[1] if "." in name else name
     return _NAME_STEM.get(track, "other")
@@ -184,8 +184,17 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             from .render_sf import render_streams
         streams = render_streams(doc, sr=doc.sample_rate)
         for name, y in streams.items():
+            stem = stem_for_stream(doc, name)
+            if stem == "vocals":
+                # the encoder transcribed lead+backing together (unsplit vocal):
+                # score that stream against both original vocal stems summed
+                orig["lead_vocals"] = orig["lead_vocals"] + orig["backing_vocals"]
+                orig["backing_vocals"] = np.zeros_like(orig["backing_vocals"])
+                notes_side["vocals"] = ("vocals not split: lead_vocals row compares "
+                                        "lead+backing")
+                stem = "lead_vocals"
             m = _mono(y, doc.sample_rate)[:n]
-            rend[stem_for_stream(doc, name)][:len(m)] += m
+            rend[stem][:len(m)] += m
     else:
         rs = default_out_dir(sc_or_wav)
         separate(sc_or_wav, rs)
