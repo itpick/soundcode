@@ -162,7 +162,7 @@ def test_render_defaults_to_sf2_and_names_the_output(tmp_path, monkeypatch):
     sc.write_text(SCALE_SC)
     calls = {}
     monkeypatch.setattr(render_sf, "render_to_file",
-                        lambda doc, path, sr=None: calls.setdefault("path", path) and (5, 5.0))
+                        lambda doc, path, sr=None, **k: calls.setdefault("path", path) and (5, 5.0))
     assert cli.main(["render", str(sc)]) == 0
     assert calls["path"].endswith("song.render.wav")
 
@@ -183,3 +183,30 @@ def test_server_tags_render_files(tmp_path, monkeypatch):
     (tmp_path / "out" / "sc" / "song.render.wav").write_bytes(b"RIFF")
     monkeypatch.setenv("SOUNDCODE_ROOT", str(tmp_path))
     assert server._discover_tracks()[0]["kind"] == "render"
+
+
+# --- instrumental focus: vocals left out of renders unless asked for -------------------
+
+def test_mix_leaves_out_vocal_streams_by_default():
+    doc = parse("%sc 0.3\n@duration 1.0\n\n:notes.vox\n@0.0 C4 0.5s 90\n"
+                "\n:notes.keys inst=keys.piano\n@0.0 E4 0.5s 90\n")
+    t = np.arange(44100) / 44100
+    keys = np.stack([0.1 * np.sin(2 * np.pi * 330 * t)] * 2, 1).astype(np.float32)
+    vox = np.stack([0.5 * np.sin(2 * np.pi * 262 * t)] * 2, 1).astype(np.float32)
+    only_keys = render_sf.mix(doc, {"notes.keys": keys}, 44100)
+    default = render_sf.mix(doc, {"notes.keys": keys, "notes.vox": vox}, 44100)
+    with_vox = render_sf.mix(doc, {"notes.keys": keys, "notes.vox": vox}, 44100,
+                             with_vocals=True)
+    np.testing.assert_allclose(default, only_keys)
+    assert not np.allclose(with_vox, only_keys)
+
+
+def test_cli_render_with_vocals_flag(tmp_path, monkeypatch):
+    sc = tmp_path / "song.sc"
+    sc.write_text(SCALE_SC)
+    seen = {}
+    monkeypatch.setattr(render_sf, "render_to_file",
+                        lambda doc, path, sr=None, with_vocals=False:
+                        seen.setdefault("v", with_vocals) is not None and (1, 1.0))
+    cli.main(["render", str(sc), "--with-vocals"])
+    assert seen["v"] is True

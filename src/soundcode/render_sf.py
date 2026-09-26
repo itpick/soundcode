@@ -161,7 +161,11 @@ def render_streams(doc: Document, sr: int | None = None,
     return out
 
 
-def mix(doc: Document, streams: dict[str, np.ndarray], sr: int) -> np.ndarray:
+def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
+        with_vocals: bool = False) -> np.ndarray:
+    """Mix rendered streams. Vocal streams are left out unless asked for: until
+    Milestone 2 gives them a real singing voice, a "voice oohs" line is a
+    distraction when judging the instruments."""
     from .render import _GAIN, _PAN, section_gains
 
     n = max((y.shape[0] for y in streams.values()), default=sr)
@@ -169,6 +173,8 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int) -> np.ndarray:
     for name, y in streams.items():
         s = doc.stream(name)
         target = gm.target_for(name, s.fields.get("inst", "unknown") if s else "unknown")
+        if target.family == "voice" and not with_vocals:
+            continue
         has_level = s is not None and "level" in s.meta
         gain = 1.0 if has_level else _GAIN.get(target.family, _GAIN["unknown"])
         pan = _PAN.get(target.family, 0.0)
@@ -184,15 +190,17 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int) -> np.ndarray:
     return buf
 
 
-def render(doc: Document, sr: int | None = None, sf2: Path | None = None) -> np.ndarray:
+def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
+           with_vocals: bool = False) -> np.ndarray:
     sr = sr or doc.sample_rate
-    return mix(doc, render_streams(doc, sr, sf2), sr)
+    return mix(doc, render_streams(doc, sr, sf2), sr, with_vocals)
 
 
-def render_to_file(doc: Document, path: str, sr: int | None = None) -> tuple[int, float]:
+def render_to_file(doc: Document, path: str, sr: int | None = None,
+                   with_vocals: bool = False) -> tuple[int, float]:
     import soundfile as sf
 
     sr = sr or doc.sample_rate
-    audio = render(doc, sr)
+    audio = render(doc, sr, with_vocals=with_vocals)
     sf.write(path, audio, sr, subtype="PCM_16")
     return len(expand(doc)), audio.shape[0] / sr

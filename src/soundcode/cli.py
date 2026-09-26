@@ -83,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("--sr", type=int, default=None)
     p_render.add_argument("--engine", choices=("sf2", "mock"), default="sf2",
                           help="sf2: sampled instruments (default); mock: crude synth")
+    p_render.add_argument("--with-vocals", action="store_true",
+                          help="include vocal streams (sf2 engine leaves them out by default)")
 
     p_sep = sub.add_parser("separate", help="split audio into vocal and instrument stems")
     p_sep.add_argument("file")
@@ -118,7 +120,9 @@ def main(argv: list[str] | None = None) -> int:
                 suffix = ".mock.wav"
             else:
                 from . import render_sf
-                render_to_file = render_sf.render_to_file
+
+                def render_to_file(doc, out, sr):
+                    return render_sf.render_to_file(doc, out, sr, with_vocals=args.with_vocals)
                 suffix = ".render.wav"
             out = args.out or str(Path(args.file).with_suffix(suffix))
             try:
