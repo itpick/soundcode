@@ -13,11 +13,12 @@ dependencies = [
 # See docs/superpowers/specs/2026-07-31-soundcode-design.md §3.
 encode = [
     "demucs>=4.1.0",
+    "audio-separator[cpu]>=0.47",
     "basic-pitch>=0.4",
     "torchcrepe>=0.0.23",
     "whisperx>=3.1",
     "beat-this",
-    "librosa>=0.10",
+    "librosa>=0.10,<1.0",
 ]
 
 [project.scripts]
@@ -29,3 +30,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soundcode"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
