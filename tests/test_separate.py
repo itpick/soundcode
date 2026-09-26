@@ -199,3 +199,32 @@ def test_backend_failure_raises_separation_error_naming_the_model(tmp_path):
     sf.write(str(src), tone(220, 0.5).T, SR)
     with pytest.raises(sep.SeparationError, match="karaoke"):
         sep.separate(src, tmp_path / "out", backend=FakeBackend(fail_on="karaoke"))
+
+
+# --- CLI -----------------------------------------------------------------------
+
+from soundcode import cli  # noqa: E402
+
+
+def test_default_out_dir_is_under_out_stems():
+    assert sep.default_out_dir("audio/test/Song (Live).mp3") == Path("out/stems/Song (Live)")
+
+
+def test_cli_separate_prints_levels_and_exits_zero(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    monkeypatch.setattr(sep, "AudioSeparatorBackend", FakeBackend)
+    code = cli.main(["separate", str(src), "-o", str(tmp_path / "out")])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "lead_vocals" in out and "sum check: OK" in out
+
+
+def test_cli_separate_reports_backend_failure_and_exits_two(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    monkeypatch.setattr(sep, "AudioSeparatorBackend",
+                        lambda: FakeBackend(fail_on="roformer_ep_317"))
+    code = cli.main(["separate", str(src), "-o", str(tmp_path / "out")])
+    assert code == 2
+    assert "separation failed" in capsys.readouterr().err

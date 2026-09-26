@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -237,8 +238,35 @@ def _write_manifest(r: SeparationResult, n: int) -> None:
         json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
+def default_out_dir(audio: Path | str) -> Path:
+    return Path("out") / "stems" / Path(audio).stem
+
+
 class AudioSeparatorBackend:
-    """Placeholder until Task 4; importing audio_separator happens there."""
+    """Runs one model through the `audio-separator` package.
+
+    Weights download on first use into `models/` (or $SOUNDCODE_MODELS).
+    PyTorch models use MPS on Apple Silicon; ops MPS lacks fall back to CPU.
+    """
+
+    def __init__(self, model_dir: Path | None = None):
+        self.model_dir = Path(model_dir or os.environ.get("SOUNDCODE_MODELS", "models"))
 
     def run(self, model: str, audio: Path, out_dir: Path) -> dict[str, Path]:
-        raise SeparationError("audio-separator backend not implemented yet")
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        try:
+            from audio_separator.separator import Separator
+        except ImportError as exc:
+            raise SeparationError(
+                "audio-separator is not installed "
+                "(uv pip install --python .venv/bin/python 'audio-separator[cpu]')"
+            ) from exc
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        separator = Separator(output_dir=str(out_dir),
+                              model_file_dir=str(self.model_dir),
+                              output_format="WAV")
+        separator.load_model(model_filename=model)
+        files = separator.separate(str(audio))
+        paths = [Path(f) if Path(f).is_absolute() else Path(out_dir) / Path(f).name
+                 for f in files]
+        return label_outputs(paths)

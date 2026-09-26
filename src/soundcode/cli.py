@@ -3,6 +3,7 @@
 Implemented so far (milestone M1):
     soundcode check  <file.sc>            parse, validate, report
     soundcode render <file.sc> -o out.wav mock render (Path B stage 1)
+    soundcode separate <audio> [-o dir]   split into vocal + instrument stems
 
 Still to come: `encode` (audio -> .sc) and `generate` (.sc -> mock -> Remix).
 """
@@ -81,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("-o", "--out", default=None)
     p_render.add_argument("--sr", type=int, default=None)
 
+    p_sep = sub.add_parser("separate", help="split audio into vocal and instrument stems")
+    p_sep.add_argument("file")
+    p_sep.add_argument("-o", "--out", default=None,
+                       help="output folder (default out/stems/<name>)")
+
     p_encode = sub.add_parser("encode", help="analyse audio and write a .sc file")
     p_encode.add_argument("file")
     p_encode.add_argument("-o", "--out", default=None)
@@ -106,6 +112,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"rendered {count} events -> {out}  ({secs:.2f}s @ "
                   f"{args.sr or doc.sample_rate} Hz)")
             return 0
+
+        if args.cmd == "separate":
+            from . import separate as sep
+
+            out = args.out or str(sep.default_out_dir(args.file))
+            try:
+                res = sep.separate(args.file, out, backend=sep.AudioSeparatorBackend())
+            except sep.SeparationError as exc:
+                print(f"separation failed: {exc}", file=sys.stderr)
+                return 2
+            for name in (*sep.STEMS, "vocals", "instrumental", "residual"):
+                db = res.levels[name]
+                print(f"  {name:<15} {db:7.1f} dBFS" if db > -200 else f"  {name:<15}  silent")
+            r = res.report
+            verdict = "OK" if r.ok else "FAILED"
+            print(f"sum check: {verdict}  (level diff {r.level_diff_db:+.2f} dB, "
+                  f"residual {r.residual_db:.1f} dB)  -> {out}")
+            for w in res.warnings:
+                print(f"  warn: {w}")
+            return 0 if r.ok else 1
 
         if args.cmd == "encode":
             from .encode import encode
