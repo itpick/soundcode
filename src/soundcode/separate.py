@@ -13,11 +13,13 @@ mix exactly, and the level of the residual says how much separation lost.
 
 from __future__ import annotations
 
+import json
 import math
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Protocol
 
 import numpy as np
 import soundfile as sf
@@ -102,3 +104,141 @@ def sum_check(mix: np.ndarray, stems: Mapping[str, np.ndarray],
         rel = res_db - mix_db
     ok = abs(diff) <= max_level_diff_db and rel <= max_residual_db
     return SumReport(mix_db, sum_db, diff, rel, ok)
+
+
+# --------------------------------------------------------------------------
+# pipeline
+# --------------------------------------------------------------------------
+
+class SeparationError(RuntimeError):
+    """A separation pass failed; the message names the model."""
+
+
+class Backend(Protocol):
+    def run(self, model: str, audio: Path, out_dir: Path) -> dict[str, Path]:
+        """Run one model on `audio`; return {lowercase stem label: wav path}."""
+
+
+@dataclass(frozen=True)
+class Pass:
+    model: str
+    source: str                 # "mix", or an output name of an earlier pass
+    outputs: dict[str, str]     # model label -> our name; repeats are summed
+
+
+PASSES = (
+    Pass("model_bs_roformer_ep_317_sdr_12.9755.ckpt", "mix",
+         {"vocals": "vocals", "instrumental": "instrumental"}),
+    Pass("mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt", "vocals",
+         {"vocals": "lead_vocals", "instrumental": "backing_vocals"}),
+    # Run on the instrumental, so its "vocals" output is only bleed from
+    # pass 1; folding it into `other` keeps the stems summing to the mix.
+    Pass("htdemucs_6s.yaml", "instrumental",
+         {"drums": "drums", "bass": "bass", "guitar": "guitar",
+          "piano": "piano", "other": "other", "vocals": "other"}),
+)
+
+_VOCAL_STEMS = ("lead_vocals", "backing_vocals")
+_OWNED = (*STEMS, "vocals", "instrumental", "residual")
+
+
+@dataclass
+class SeparationResult:
+    source: Path
+    out_dir: Path
+    stems: dict[str, Path]
+    mixes: dict[str, Path]
+    levels: dict[str, float]    # RMS dBFS per stem and mix
+    report: SumReport
+    warnings: list[str]
+
+
+def separate(audio: Path | str, out_dir: Path | str,
+             backend: Backend | None = None) -> SeparationResult:
+    """Split `audio` into STEMS under `out_dir`. See the module docstring."""
+    src, out = Path(audio), Path(out_dir)
+    backend = backend or AudioSeparatorBackend()
+    out.mkdir(parents=True, exist_ok=True)
+    work = out / "_work"
+    shutil.rmtree(work, ignore_errors=True)
+    work.mkdir()
+    for name in _OWNED:
+        (out / f"{name}.wav").unlink(missing_ok=True)
+
+    mix = read_stereo(src)
+    n = mix.shape[1]
+    # models see a plain-named copy of exactly the audio we sum-check against
+    inputs: dict[str, Path] = {"mix": work / "mix.wav"}
+    write_wav(inputs["mix"], mix)
+
+    audio_by_name: dict[str, np.ndarray] = {}
+    warnings: list[str] = []
+    for i, p in enumerate(PASSES, 1):
+        pass_dir = work / f"pass{i}"
+        pass_dir.mkdir()
+        try:
+            produced = backend.run(p.model, inputs[p.source], pass_dir)
+        except Exception as exc:  # any model/backend failure
+            raise SeparationError(f"{p.model}: {exc}") from exc
+        for label, name in p.outputs.items():
+            if label not in produced:
+                warnings.append(f"{p.model} produced no '{label}' output")
+                continue
+            y = read_stereo(produced[label], length=n)
+            audio_by_name[name] = audio_by_name.get(name, 0) + y
+            # intermediate results become inputs for later passes
+            if name not in STEMS:
+                inputs[name] = work / f"{name}.wav"
+                write_wav(inputs[name], audio_by_name[name])
+
+    stems_audio = {s: audio_by_name.get(s, np.zeros_like(mix)) for s in STEMS}
+    for s in STEMS:
+        if s not in audio_by_name:
+            warnings.append(f"no audio for stem '{s}'; wrote silence")
+
+    vocals = stems_audio["lead_vocals"] + stems_audio["backing_vocals"]
+    instrumental = sum(y for s, y in stems_audio.items() if s not in _VOCAL_STEMS)
+    mixes_audio = {"vocals": vocals, "instrumental": instrumental,
+                   "residual": mix - vocals - instrumental}
+
+    stems, mixes = {}, {}
+    for s, y in stems_audio.items():
+        stems[s] = out / f"{s}.wav"
+        write_wav(stems[s], y)
+    for m, y in mixes_audio.items():
+        mixes[m] = out / f"{m}.wav"
+        write_wav(mixes[m], y)
+
+    levels = {k: rms_db(y) for k, y in {**stems_audio, **mixes_audio}.items()}
+    report = sum_check(mix, stems_audio)
+    result = SeparationResult(src, out, stems, mixes, levels, report, warnings)
+    _write_manifest(result, n)
+    return result
+
+
+def _finite(x: float) -> float | None:
+    return x if math.isfinite(x) else None      # JSON has no Infinity
+
+
+def _write_manifest(r: SeparationResult, n: int) -> None:
+    manifest = {
+        "source": str(r.source),
+        "sr": SR,
+        "duration": n / SR,
+        "passes": [{"model": p.model, "source": p.source} for p in PASSES],
+        "stems": {s: p.name for s, p in r.stems.items()},
+        "mixes": {m: p.name for m, p in r.mixes.items()},
+        "levels_db": {k: _finite(v) for k, v in r.levels.items()},
+        "sum_check": {k: (_finite(v) if isinstance(v, float) else v)
+                      for k, v in r.report.__dict__.items()},
+        "warnings": r.warnings,
+    }
+    (r.out_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+
+
+class AudioSeparatorBackend:
+    """Placeholder until Task 4; importing audio_separator happens there."""
+
+    def run(self, model: str, audio: Path, out_dir: Path) -> dict[str, Path]:
+        raise SeparationError("audio-separator backend not implemented yet")
