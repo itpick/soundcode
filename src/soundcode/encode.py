@@ -14,8 +14,6 @@ stream-level estimate from a proxy check.
 from __future__ import annotations
 
 import math
-import shutil
-import subprocess
 import sys
 import tempfile
 import warnings
@@ -64,31 +62,29 @@ def load_audio(path: str, sr: int = 44100) -> tuple[np.ndarray, int]:
     return y, sr
 
 
+def encoder_stems(result) -> dict[str, Path]:
+    """Separation stems under the names the stages below expect. The lead
+    vocal drives melody and lyrics; backing vocals are left for Milestone 2."""
+    stems = {k: v for k, v in result.stems.items()
+             if k in ("drums", "bass", "guitar", "piano", "other")}
+    stems["vocals"] = result.stems["lead_vocals"]
+    return stems
+
+
 def separate_stems(path: str, workdir: Path) -> dict[str, Path]:
-    """Demucs stems. CPU-only: the MPS path is broken for complex FFT ops."""
-    if shutil.which("demucs") is None and not _module_available("demucs"):
-        _log("demucs unavailable — analysing the full mix instead")
+    """Seven-stem separation (see separate.py); fails soft into STEM_FAILURE."""
+    from . import separate as sep
+
+    _log("separating stems (RoFormer vocals, karaoke lead/backing, demucs 6-stem)")
+    try:
+        result = sep.separate(path, workdir / "stems")
+    except sep.SeparationError as exc:
+        _log(f"separation FAILED: {exc}")
+        STEM_FAILURE.append(str(exc))
         return {}
-    out = workdir / "stems"
-    out.mkdir(parents=True, exist_ok=True)
-    # htdemucs is a Transformer and refuses any segment longer than it was
-    # trained for; its maximum is 7.8s. Anything larger fails outright.
-    cmd = [sys.executable, "-m", "demucs", "-n", "htdemucs", "-d", "cpu",
-           "--segment", "7", "-o", str(out), path]
-    _log("separating stems (demucs, cpu — this is the slow stage)")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout).strip().splitlines()
-        reason = tail[-1] if tail else "unknown error"
-        _log(f"demucs FAILED: {reason}")
-        STEM_FAILURE.append(reason)
-        return {}
-    found: dict[str, Path] = {}
-    for wav in out.rglob("*.wav"):
-        found[wav.stem] = wav
-    if not found:
-        STEM_FAILURE.append("demucs produced no stem files")
-    return found
+    if not result.report.ok:
+        _log(f"stem sum check failed: residual {result.report.residual_db:.1f} dB")
+    return encoder_stems(result)
 
 
 def _module_available(name: str) -> bool:
@@ -572,6 +568,9 @@ def encode(path: str, out_path: str | None = None,
                                 "voice.lead")
     _log("other/harmony notes")
     other_st = stage_notes_poly(stems.get("other"), "other", grid)
+    _log("guitar/piano notes")
+    guitar_st = stage_notes_poly(stems.get("guitar"), "guitar", grid)
+    piano_st = stage_notes_poly(stems.get("piano"), "piano", grid)
     _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid)
     _log("mix");       mix_st = stage_mix(y, sr)
 
@@ -609,7 +608,7 @@ def encode(path: str, out_path: str | None = None,
         lines += [":tuning", "ref          A4 = 440.0Hz", "temperament  12tet", ""]
 
     for st in (grid_st, struct_st, harm_st, perc_st, bass_st, vox_st,
-               other_st, text_st, mix_st):
+               guitar_st, piano_st, other_st, text_st, mix_st):
         if not st.ok:
             if st.warns:
                 lines.append(f"# :{st.name} omitted — {'; '.join(st.warns)}")

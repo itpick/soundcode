@@ -228,3 +228,26 @@ def test_cli_separate_reports_backend_failure_and_exits_two(tmp_path, monkeypatc
     code = cli.main(["separate", str(src), "-o", str(tmp_path / "out")])
     assert code == 2
     assert "separation failed" in capsys.readouterr().err
+
+
+# --- encoder integration -------------------------------------------------------
+
+from soundcode import encode as enc  # noqa: E402
+
+
+def test_encoder_stems_maps_lead_vocals_to_vocals(tmp_path):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    res = sep.separate(src, tmp_path / "out", backend=FakeBackend())
+    stems = enc.encoder_stems(res)
+    assert stems["vocals"] == res.stems["lead_vocals"]
+    assert {"drums", "bass", "guitar", "piano", "other"} <= set(stems)
+
+
+def test_separate_stems_records_failure_and_returns_empty(tmp_path, monkeypatch):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    monkeypatch.setattr(sep, "AudioSeparatorBackend", lambda: FakeBackend(fail_on="htdemucs"))
+    enc.STEM_FAILURE.clear()
+    assert enc.separate_stems(str(src), tmp_path / "wd") == {}
+    assert "htdemucs" in enc.STEM_FAILURE[0]
