@@ -48,9 +48,12 @@ Each entry carries:
 
 The table is the single source for both the encoder and the renderer.
 
-**Classifier interface.** `Tagger.scores(audio: np.ndarray, sr: int) -> dict[str, float]` returns a score for every vocabulary entry. Two implementations:
+**Classifier interface.** `Tagger.scores(audio: np.ndarray, sr: int) -> dict[str, float]` returns a score for every vocabulary entry. Three implementations:
 - `ClapTagger` (msclap; zero-shot over the prompts);
+- `MuLanTagger` (MuQ-MuLan; zero-shot, CC BY-NC weights);
 - `EssentiaTagger` (the MTG-Jamendo instrument model, with its labels mapped into the vocabulary).
+
+Audio LLMs (MOSS-Music, Qwen3-Omni) are not taggers here. They score about 31% on NSynth instruments. They may later cross-check the inventory as a second opinion.
 
 The default is chosen by the bake-off (§4).
 
@@ -152,7 +155,7 @@ New module `src/soundcode/render_sf.py`. The existing `render.py` stays as the `
 
 1. **Classifier bake-off.**
    - Data: BabySlakh (20 tracks, labelled stems), in a gitignored `data/`.
-   - Metric: family-level accuracy of each tagger's per-stem top label.
+   - Metric: family-level accuracy of each tagger's (CLAP, MuQ-MuLan, Essentia) per-stem top label.
    - Target: ≥ 80%. The higher-scoring tagger becomes the default.
    - If neither meets the target, the better one still ships and the scores are recorded in the README.
    - Script: `scripts/tagger_bakeoff.py`.
