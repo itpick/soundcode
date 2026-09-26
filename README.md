@@ -54,6 +54,15 @@ lead stem ≈ silent). `encode` detects this and transcribes lead + backing
 together, with a `# NOTE:` in the `.sc` header. Proper lead/backing splitting is
 Milestone 2.
 
+**Sampled rendering and comparison.** `soundcode render song.sc` plays a `.sc`
+through a General MIDI SoundFont (GeneralUser GS, downloaded on first use), leaving
+vocal streams out unless `--with-vocals`. `soundcode compare original.wav song.sc`
+scores each rendered part against its source stem (level, note F1, chroma, onsets,
+energy) and writes an HTML report with players and spectrograms under
+`out/compare/`, served by `soundcode serve` at `/compare/`. Before/after numbers:
+`docs/results/2026-09-26-compare-baseline.md`,
+`docs/results/2026-09-26-compare-after-fixes.md`.
+
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.
@@ -70,6 +79,8 @@ pip install -e '.[encode]'  # + analysis stack (large, CPU-bound on macOS)
 soundcode check  examples/signal-lost.v3.sc
 soundcode render examples/signal-lost.v3.sc -o out/mock.wav
 soundcode separate audio/test/song.mp3            # stems -> out/stems/song/
+soundcode render  out/sc/song.sc                  # sampled instruments -> song.render.wav
+soundcode compare audio/test/song.mp3 out/sc/song.sc   # per-stem scores + report
 soundcode encode audio/test/song.wav -o out/sc/song.sc --keep-work
 soundcode serve                                  # A/B listening, :8720
 ```
