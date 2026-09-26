@@ -91,6 +91,11 @@ def merge_same_pitch(events: list[tuple]) -> list[tuple]:
     return [tuple(e) for e in out]
 
 
+def needs_fallback(st: "Stage") -> bool:
+    """pyin stands in only when basic-pitch could not run, never for a gated stem."""
+    return not st.ok and not st.gated
+
+
 def vocal_stem_name(path: Path) -> str:
     """`vocals` when encoder_stems fell back to lead+backing, else the lead stem."""
     return "vocals" if Path(path).stem == "vocals" else "lead_vocals"
@@ -128,6 +133,7 @@ class Stage:
     warns: list[str] = field(default_factory=list)
     ok: bool = False
     stem: str = ""                # source stem, for the renderer and compare
+    gated: bool = False           # silent under the loudness gate: no fallback
     level_db: float | None = None  # source stem RMS over its active blocks
 
 
@@ -229,21 +235,12 @@ def stage_grid(y: np.ndarray, sr: int, duration: float) -> tuple[Stage, dict]:
     for bar in range(1, n_bars + 2, 16):
         st.lines.append(f"anchor  bar {bar}    @{downbeat + (bar - 1) * bar_dur:.3f}")
 
-    # local tempo over 8-bar windows, so a curve rather than one scalar
-    step = max(int(bar_dur * 8), 1)
-    for t in range(0, int(duration), step):
-        seg = mono[int(t * sr):int(min(t + step, duration) * sr)]
-        if seg.size < sr:
-            continue
-        try:
-            loc = float(np.atleast_1d(
-                librosa.feature.tempo(y=seg, sr=sr, aggregate=None))[0])
-        except Exception:                                # noqa: BLE001
-            loc = tempo
-        if 40 <= loc <= 240:
-            st.lines.append(f"tempo   @{float(t):.3f}   {loc:.2f}")
-    if not any(ln.startswith("tempo") for ln in st.lines):
-        st.lines.append(f"tempo   @0.000   {tempo:.2f}")
+    # One tempo: the one every note below is positioned with (downbeat +
+    # (bar-1) * bar_dur). Per-window tempo estimates used to be written here as
+    # a curve, but notes were never placed on it, so the renderer drifted by
+    # seconds against the transcription. A real tempo curve comes back with a
+    # beat/downbeat tracker whose beats the notes are also placed on.
+    st.lines.append(f"tempo   @0.000   {tempo:.2f}")
 
     st.ok = True
     return st, {"tempo": tempo, "beats": beats, "downbeat": downbeat,
@@ -529,12 +526,14 @@ def stage_notes_poly(stem: Path | None, name: str, grid: dict,
         st.level_db = active_level_db(y_stem, mask, sr)
         if not mask.any():
             st.warns = ["stem silent (below the loudness gate throughout)"]
+            st.gated = True
             return st
         events = [e for e in events
                   if mask[min(int(e[0] / GATE_BLOCK_S), len(mask) - 1)]]
     events = merge_same_pitch(events)
     if not events:
         st.warns.append("no notes above the loudness gate")
+        st.gated = mix is not None
         return st
 
     from .pitch import cents_to_name
@@ -684,13 +683,13 @@ def encode(path: str, out_path: str | None = None,
     mono_mix = y.mean(0)
     bass_st = stage_notes_poly(stems.get("bass"), "bass", grid, mix=mono_mix, sr=sr,
                                stem_name="bass")
-    if not bass_st.ok:
+    if needs_fallback(bass_st):
         bass_st, _ = stage_notes(stems.get("bass"), "bass", sr, grid, "E1", "E4",
                                  "bass.electric")
     _log("vocal notes")
     vox_st = stage_notes_poly(stems.get("vocals"), "vox", grid, mix=mono_mix, sr=sr,
                               stem_name=vocal_stem_name(stems["vocals"]) if "vocals" in stems else "")
-    if not vox_st.ok:
+    if needs_fallback(vox_st):
         vox_st, _ = stage_notes(stems.get("vocals"), "vox", sr, grid, "C2", "C6",
                                 "voice.lead")
     _log("other/harmony notes")

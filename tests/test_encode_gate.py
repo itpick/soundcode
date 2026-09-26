@@ -96,3 +96,38 @@ def test_vocals_fallback_is_marked_for_compare(tmp_path):
     assert cmp.stem_for_stream(doc, "notes.vox") == "vocals"
     assert enc.vocal_stem_name(Path("x/out/stems/s/vocals.wav")) == "vocals"
     assert enc.vocal_stem_name(Path("x/out/stems/s/lead_vocals.wav")) == "lead_vocals"
+
+
+# --- Task 10 findings: grid consistency and the ungated pyin fallback ----------------
+
+def test_grid_agrees_with_how_notes_are_positioned(monkeypatch):
+    """Notes are placed at downbeat + (bar-1)*bar_dur; the :grid the renderer
+    reads must put every bar exactly there, whatever local tempo estimates say."""
+    import librosa
+    from soundcode.expand import build_grid
+    from soundcode.parser import parse
+
+    sr = 22050
+    y = np.zeros(sr * 16, np.float32)                     # short: a single anchor
+    for t in np.arange(0.5, 16, 0.5):                     # 120 bpm clicks
+        y[int(t * sr):int(t * sr) + 200] = np.hanning(200)
+    real_tempo = librosa.feature.tempo
+
+    def local_is_wrong(**k):                              # only the per-window call
+        return np.array([90.0]) if "aggregate" in k and k["aggregate"] is None \
+            else real_tempo(**k)
+    monkeypatch.setattr(librosa.feature, "tempo", local_is_wrong)
+    st, grid = enc.stage_grid(np.stack([y, y]), sr, 16.0)
+    doc = parse("%sc 0.3\n\n" + "\n".join(enc._stage_lines(st)))
+    g = build_grid(doc)
+    for bar in range(1, 8):
+        want = grid["downbeat"] + (bar - 1) * grid["bar_dur"]
+        assert abs(g.time_of(bar, 1.0) - want) < 0.005, bar
+
+
+def test_pyin_fallback_does_not_undo_the_gate():
+    gated = enc.Stage("notes.bass", warns=["stem silent (below the loudness gate throughout)"])
+    gated.gated = True
+    failed = enc.Stage("notes.bass", warns=["basic-pitch unavailable (ImportError)"])
+    assert not enc.needs_fallback(gated)
+    assert enc.needs_fallback(failed)
