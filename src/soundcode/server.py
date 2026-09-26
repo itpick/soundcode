@@ -51,6 +51,8 @@ def _discover_tracks() -> list[dict]:
             kind = "ref"          # the original recording we are aiming at
         elif label.startswith("stems/"):
             kind = "stem"
+        elif ".render" in label or "render-" in label:
+            kind = "render"
         elif "mock" in label:
             kind = "mock"
         elif "cover" in label:
@@ -68,7 +70,7 @@ def _discover_tracks() -> list[dict]:
             "bytes": stat.st_size,
             "mtime": stat.st_mtime,
         })
-    order = {"ref": 0, "mock": 1, "cover": 2, "stem": 3, "other": 4}
+    order = {"ref": 0, "render": 1, "mock": 2, "cover": 3, "stem": 4, "other": 5}
     tracks.sort(key=lambda t: (order.get(t["kind"], 9), t["strength"] or 0, t["label"]))
     return tracks
 

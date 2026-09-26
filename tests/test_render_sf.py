@@ -150,3 +150,36 @@ def test_bad_download_is_not_left_behind(tmp_path, monkeypatch):
     with pytest.raises(render_sf.SoundFontError, match="checksum"):
         render_sf.soundfont_path()
     assert not (tmp_path / "sf" / "GeneralUser-GS.sf2").exists()
+
+
+# --- CLI + server ----------------------------------------------------------------
+
+from soundcode import cli, server  # noqa: E402
+
+
+def test_render_defaults_to_sf2_and_names_the_output(tmp_path, monkeypatch):
+    sc = tmp_path / "song.sc"
+    sc.write_text(SCALE_SC)
+    calls = {}
+    monkeypatch.setattr(render_sf, "render_to_file",
+                        lambda doc, path, sr=None: calls.setdefault("path", path) and (5, 5.0))
+    assert cli.main(["render", str(sc)]) == 0
+    assert calls["path"].endswith("song.render.wav")
+
+
+def test_render_reports_missing_soundfont_and_exits_two(tmp_path, monkeypatch, capsys):
+    sc = tmp_path / "song.sc"
+    sc.write_text(SCALE_SC)
+
+    def boom(*a, **k):
+        raise render_sf.SoundFontError("could not download the SoundFont; set SOUNDCODE_SOUNDFONT")
+    monkeypatch.setattr(render_sf, "render_to_file", boom)
+    assert cli.main(["render", str(sc)]) == 2
+    assert "SOUNDCODE_SOUNDFONT" in capsys.readouterr().err
+
+
+def test_server_tags_render_files(tmp_path, monkeypatch):
+    (tmp_path / "out" / "sc").mkdir(parents=True)
+    (tmp_path / "out" / "sc" / "song.render.wav").write_bytes(b"RIFF")
+    monkeypatch.setenv("SOUNDCODE_ROOT", str(tmp_path))
+    assert server._discover_tracks()[0]["kind"] == "render"

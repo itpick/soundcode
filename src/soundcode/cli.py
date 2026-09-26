@@ -81,6 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("file")
     p_render.add_argument("-o", "--out", default=None)
     p_render.add_argument("--sr", type=int, default=None)
+    p_render.add_argument("--engine", choices=("sf2", "mock"), default="sf2",
+                          help="sf2: sampled instruments (default); mock: crude synth")
 
     p_sep = sub.add_parser("separate", help="split audio into vocal and instrument stems")
     p_sep.add_argument("file")
@@ -104,13 +106,25 @@ def main(argv: list[str] | None = None) -> int:
             return _summarise(args.file)
 
         if args.cmd == "render":
-            from .render import render_to_file
-
             doc = parse_file(args.file)
-            out = args.out or str(Path(args.file).with_suffix(".mock.wav"))
-            count, secs = render_to_file(doc, out, args.sr)
+            if args.engine == "mock":
+                from .render import render_to_file
+                suffix = ".mock.wav"
+            else:
+                from . import render_sf
+                render_to_file = render_sf.render_to_file
+                suffix = ".render.wav"
+            out = args.out or str(Path(args.file).with_suffix(suffix))
+            try:
+                count, secs = render_to_file(doc, out, args.sr)
+            except Exception as exc:
+                from .render_sf import SoundFontError
+                if isinstance(exc, SoundFontError):
+                    print(f"render failed: {exc}", file=sys.stderr)
+                    return 2
+                raise
             print(f"rendered {count} events -> {out}  ({secs:.2f}s @ "
-                  f"{args.sr or doc.sample_rate} Hz)")
+                  f"{args.sr or doc.sample_rate} Hz, engine {args.engine})")
             return 0
 
         if args.cmd == "separate":
