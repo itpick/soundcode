@@ -234,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
             steps = []
             for label, cmd in (
                 ("encode", ["encode", src, "-o", str(sc)]),
-                ("render", ["render", str(sc), "-o", str(mock)]),
+                ("render", ["render", str(sc), "-o", str(mock), "--engine", "mock"]),
             ):
                 proc = subprocess.run(
                     [sys.executable, "-m", "soundcode.cli", *cmd],
@@ -255,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             src = body.get("source", "examples/signal-lost.v3.sc")
             dest = root / "out" / (Path(src).stem + ".mock.wav")
             proc = subprocess.run(
-                [sys.executable, "-m", "soundcode.cli", "render", src, "-o", str(dest)],
+                [sys.executable, "-m", "soundcode.cli", "render", src, "-o", str(dest), "--engine", "mock"],
                 cwd=root, capture_output=True, text=True,
                 env={**os.environ, "PYTHONPATH": str(root / "src")},
             )

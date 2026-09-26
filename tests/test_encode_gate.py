@@ -131,3 +131,15 @@ def test_pyin_fallback_does_not_undo_the_gate():
     failed = enc.Stage("notes.bass", warns=["basic-pitch unavailable (ImportError)"])
     assert not enc.needs_fallback(gated)
     assert enc.needs_fallback(failed)
+
+
+def test_gate_keeps_a_sparse_soft_part():
+    """One short -42 dB note per 2 s block (a sparse soft piano) is real music:
+    its 2 s mean is ~-51 dB, but its loudest 100 ms clears the floor."""
+    t = np.arange(int(0.25 * SR)) / SR
+    note = (10 ** (-42 / 20) * np.sqrt(2) * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+    stem = np.zeros(int(8 * SR), np.float32)
+    for k in range(4):
+        stem[int(k * 2 * SR):int(k * 2 * SR) + note.size] = note
+    mix = noise(8, -30)
+    assert enc.active_blocks(stem, mix, SR).all()

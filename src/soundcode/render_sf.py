@@ -129,11 +129,21 @@ def _synth_stream(events: list[MidiEvent], target: gm.Target, sfpath: Path,
     return out
 
 
-def _rms_db(y: np.ndarray) -> float:
-    active = y[np.abs(y).max(1) > 1e-4] if y.size else y
-    if not active.size:
+# Must equal encode.GATE_BLOCK_S: `meta level` is the stem's RMS over the 2 s
+# blocks where it plays, gaps inside those blocks included, so the render is
+# measured the same way. (Measuring only sounding samples biased every sparse
+# part low by 10*log10(sounding fraction).)
+LEVEL_BLOCK_S = 2.0
+
+
+def _rms_db(y: np.ndarray, sr: int) -> float:
+    b = max(1, int(LEVEL_BLOCK_S * sr))
+    blocks = [y[i:i + b] for i in range(0, len(y), b)]
+    active = [x for x in blocks if x.size and np.abs(x).max() > 1e-4]
+    if not active:
         return float("-inf")
-    return 20 * float(np.log10(np.sqrt(np.mean(active.astype(np.float64) ** 2))))
+    a = np.concatenate(active).astype(np.float64)
+    return 20 * float(np.log10(np.sqrt(np.mean(a ** 2))))
 
 
 def render_streams(doc: Document, sr: int | None = None,
@@ -154,7 +164,7 @@ def render_streams(doc: Document, sr: int | None = None,
         s = doc.stream(name)
         level = s.meta.get("level") if s is not None else None
         if level is not None:
-            have = _rms_db(y)
+            have = _rms_db(y, sr)
             if np.isfinite(have):
                 y *= 10 ** ((float(level.rstrip("dB")) - have) / 20)
         out[name] = y

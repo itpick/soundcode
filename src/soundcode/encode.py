@@ -60,10 +60,32 @@ def _block_db(y: np.ndarray, sr: int) -> np.ndarray:
     return out
 
 
+GATE_PEAK_WIN_S = 0.1
+
+
+def _block_peak_db(y: np.ndarray, sr: int) -> np.ndarray:
+    """Loudest 100 ms RMS inside each block: a sparse soft note is real music
+    even when its 2 s mean falls under the floor."""
+    n = max(1, int(np.ceil(len(y) / (GATE_BLOCK_S * sr))))
+    w = max(1, int(GATE_PEAK_WIN_S * sr))
+    out = np.full(n, -np.inf)
+    for i in range(n):
+        seg = y[int(i * GATE_BLOCK_S * sr): int((i + 1) * GATE_BLOCK_S * sr)]
+        if not seg.size:
+            continue
+        k = len(seg) // w
+        frames = seg[: k * w].reshape(k, w) if k else seg[None, :]
+        r = float(np.sqrt(np.max(np.mean(np.square(frames, dtype=np.float64), axis=1))))
+        out[i] = 20 * math.log10(r) if r > 0 else -np.inf
+    return out
+
+
 def active_blocks(stem: np.ndarray, mix: np.ndarray, sr: int) -> np.ndarray:
+    """Absolute floor on the block's loudest 100 ms; relative rule on block means."""
     s, m = _block_db(stem, sr), _block_db(mix, sr)
+    peak = _block_peak_db(stem, sr)
     m = np.pad(m, (0, max(0, len(s) - len(m))), constant_values=-np.inf)[: len(s)]
-    return (s >= GATE_ABS_DB) & (s >= m - GATE_REL_DB)
+    return (peak >= GATE_ABS_DB) & (s >= m - GATE_REL_DB)
 
 
 def active_level_db(stem: np.ndarray, mask: np.ndarray, sr: int) -> float | None:

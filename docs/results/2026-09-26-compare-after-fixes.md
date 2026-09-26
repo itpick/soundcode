@@ -35,9 +35,15 @@ Drums onset F1 is 0.97–1.00 where drums exist.
 
 ## Acceptance (spec Evaluation, item 0)
 
-- **Levels within ±3 dB:** met for most stems. Four stems are 3.1–5.6 dB quiet (999999 lead, corona guitar and piano, discipline piano): rendered notes are shorter than the original's sustained sound, so their average level is lower.
+- **Levels within ±3 dB:** met for most stems. Four stems are 3.1–5.6 dB quiet (999999 lead, corona guitar and piano, discipline piano). The final review found this is a measurement mismatch, not transcription: the encoder's `meta level` is RMS over whole 2 s blocks (gaps included), while the renderer matched RMS over sounding samples only. Every render therefore landed at `level + 10·log10(sounding fraction)`, confirmed on River (drums: predicted −3.2 dB, measured −2.7 dB). Fixed after this run: the renderer now measures over the same 2 s blocks.
 - **No notes on stems more than 40 dB under the mix:** met. The River bass and `other`, and all silent drums/guitar/piano stems, are now omitted with `# … omitted — stem silent`.
 - **Mean note F1 above baseline on every song:** met on 4 of 5. 999999 did not improve. One tuning try (amplitude floor back to 0.30) gave no gain: 999999 other 0.13 → 0.14, bass 0.23 → 0.22.
+
+## Fixes from the final review (after these numbers)
+
+- Level matching measures over the same 2 s blocks as the encoder, which removes the systematic −1 to −3 dB bias.
+- The loudness gate's absolute floor applies to the loudest 100 ms in each block, not the 2 s mean, so a sparse soft part (one short −42 dB note per block) is no longer dropped. This probably explains part of the 999999 regression.
+- The server's "re-render mock" button pins `--engine mock` again.
 
 ## What still diverges (for Plan 2)
 

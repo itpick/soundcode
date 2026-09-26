@@ -124,9 +124,7 @@ def test_meta_level_sets_the_stream_rms():
     doc = parse(SCALE_SC.replace(":notes.keys inst=keys.piano",
                                  ":notes.keys inst=keys.piano\nmeta level=-30.0"))
     y = render_sf.render_streams(doc, sf2=SF2)["notes.keys"]
-    active = y[np.abs(y).max(1) > 1e-4]
-    rms_db = 20 * np.log10(np.sqrt(np.mean(active ** 2)))
-    assert abs(rms_db - (-30.0)) < 0.5
+    assert abs(render_sf._rms_db(y, 44100) - (-30.0)) < 0.5
 
 
 @needs_sf2
@@ -210,3 +208,42 @@ def test_cli_render_with_vocals_flag(tmp_path, monkeypatch):
                         seen.setdefault("v", with_vocals) is not None and (1, 1.0))
     cli.main(["render", str(sc), "--with-vocals"])
     assert seen["v"] is True
+
+
+# --- final-review fixes ---------------------------------------------------------------
+
+SPARSE_SC = """%sc 0.3
+@duration 8.0
+@sr 44100
+
+:notes.keys inst=keys.piano
+meta level=-30.0
+@0.0 C4 0.3s 100
+@2.0 E4 0.3s 100
+@4.0 G4 0.3s 100
+@6.0 C5 0.3s 100
+"""
+
+
+@needs_sf2
+def test_level_matching_measures_like_the_encoder_over_whole_blocks():
+    """meta level is RMS over 2 s blocks where the part plays, gaps included;
+    a sparse part must come out at that level measured the same way."""
+    y = render_sf.render_streams(parse(SPARSE_SC), sf2=SF2)["notes.keys"]
+    b = int(render_sf.LEVEL_BLOCK_S * 44100)
+    blocks = [y[i:i + b] for i in range(0, len(y), b)]
+    active = np.concatenate([x for x in blocks if np.abs(x).max() > 1e-4])
+    rms_db = 20 * np.log10(np.sqrt(np.mean(active.astype(np.float64) ** 2)))
+    assert abs(rms_db - (-30.0)) < 0.5
+
+
+def test_level_block_matches_the_encoder_gate_block():
+    from soundcode import encode as enc
+    assert render_sf.LEVEL_BLOCK_S == enc.GATE_BLOCK_S
+
+
+def test_server_mock_buttons_pin_the_mock_engine():
+    src = (Path(__file__).resolve().parents[1] / "src" / "soundcode" / "server.py").read_text()
+    for line in src.splitlines():
+        if '"render"' in line and ".mock" not in line and ("-o" in line):
+            assert '"--engine", "mock"' in line, line
