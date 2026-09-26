@@ -89,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     p_sep.add_argument("-o", "--out", default=None,
                        help="output folder (default out/stems/<name>)")
 
+    p_cmp = sub.add_parser("compare", help="score a render against the original, per stem")
+    p_cmp.add_argument("original")
+    p_cmp.add_argument("render", help=".sc file (rendered per stream) or a rendered .wav")
+    p_cmp.add_argument("-o", "--out", default=None, help="default out/compare/<name>")
+    p_cmp.add_argument("--engine", choices=("sf2", "mock"), default="sf2")
+
     p_encode = sub.add_parser("encode", help="analyse audio and write a .sc file")
     p_encode.add_argument("file")
     p_encode.add_argument("-o", "--out", default=None)
@@ -146,6 +152,22 @@ def main(argv: list[str] | None = None) -> int:
             for w in res.warnings:
                 print(f"  warn: {w}")
             return 0 if r.ok else 1
+
+        if args.cmd == "compare":
+            from . import compare as cmp
+
+            out = args.out or str(Path("out") / "compare" / Path(args.original).stem)
+            rep = cmp.run(args.original, args.render, out, engine=args.engine)
+            f = cmp._fmt
+            print(f"{'stem':<15}{'orig dB':>8}{'rend dB':>8}{'Δ dB':>7}{'noteF1':>8}"
+                  f"{'anyOct':>8}{'chroma':>8}{'onsetF1':>8}{'energy':>8}")
+            for s, r in rep["stems"].items():
+                print(f"{s:<15}{f(r['level_orig_db'], '.1f'):>8}{f(r['level_render_db'], '.1f'):>8}"
+                      f"{f(r['level_diff_db'], '+.1f'):>7}{f(r['notes_f1']):>8}"
+                      f"{f(r['notes_f1_octave']):>8}{f(r['chroma']):>8}"
+                      f"{f(r['onset_f1']):>8}{f(r['energy_corr']):>8}")
+            print(f"report: {rep['report']}")
+            return 0
 
         if args.cmd == "encode":
             from .encode import encode

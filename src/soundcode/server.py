@@ -42,6 +42,8 @@ def _discover_tracks() -> list[dict]:
     for path in sorted(out.rglob("*")):
         if path.suffix.lower() not in (".wav", ".mp3", ".flac", ".ogg"):
             continue
+        if "compare" in path.relative_to(out).parts:
+            continue              # per-stem compare files live in the report
         if "_work" in path.relative_to(out).parts:
             continue              # separation intermediates, not for listening
         rel = path.relative_to(root)
@@ -84,6 +86,14 @@ def _sc_sources() -> list[dict]:
         {"name": str(p.relative_to(root)), "text": p.read_text(encoding="utf-8")}
         for p in paths
     ]
+
+
+def _compare_file(rel: str) -> Path | None:
+    base = (_project_root() / "out" / "compare").resolve()
+    target = (base / rel).resolve()
+    if base not in target.parents or not target.is_file():
+        return None
+    return target
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -154,6 +164,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"tracks": _discover_tracks(), "root": str(_project_root())})
         elif route == "/api/sources":
             self._send_json({"sources": _sc_sources()})
+        elif route.startswith("/compare/"):
+            target = _compare_file(route[len("/compare/"):])
+            if target is None:
+                self.send_error(404)
+                return
+            ctype = {".html": "text/html; charset=utf-8", ".png": "image/png",
+                     ".json": "application/json", ".wav": "audio/wav"}.get(target.suffix,
+                                                                            "application/octet-stream")
+            self._send_file(target, ctype)
         elif route.startswith("/audio/"):
             rel = route[len("/audio/"):]
             target = (_project_root() / rel).resolve()
