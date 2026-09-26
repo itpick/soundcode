@@ -26,9 +26,30 @@ the fidelity path, and proving it works is the open question.
 
 ## Status
 
-`check`, `render`, `encode` and `serve` work. `decode` isn't built yet — real
-`.sc` files have been encoded from real recordings, but no cover has been
-generated.
+`check`, `render`, `separate`, `encode` and `serve` work. `decode` isn't built
+yet — real `.sc` files have been encoded from real recordings, but no cover has
+been generated.
+
+**Milestone 1 (clean separation) is done.** `soundcode separate` splits a song
+into lead vocals, backing vocals, drums, bass, guitar, piano and other (three
+passes: BS-RoFormer → karaoke Mel-RoFormer → HTDemucs 6-stem, on MPS), plus
+`vocals.wav`, `instrumental.wav` and a `residual.wav` so the stems always rebuild
+the original. Results on the M1 Max:
+
+| Input | Length | Level diff | Residual | Time |
+|---|---|---|---|---|
+| 999999 | 30 s | +0.09 dB | −19.2 dB | 112 s |
+| corona_radiata | 30 s | −0.49 dB | −19.1 dB | 99 s |
+| discipline | 30 s | −0.14 dB | −23.0 dB | 91 s |
+| lights_in_the_sky | 30 s | −0.68 dB | −15.5 dB | 88 s |
+| The River (full song) | 196 s | −0.10 dB | −22.0 dB | 573 s |
+
+Pass = level within ±1 dB and residual ≤ −15 dB. Times include model loading
+(about 2.9× real time on a full song). The karaoke model sometimes files a
+heavily processed lead as backing vocals (lights_in_the_sky: lead ≈ silent);
+lead/backing splitting is revisited in Milestone 2.
+
+Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.
 
@@ -43,6 +64,7 @@ pip install -e '.[encode]'  # + analysis stack (large, CPU-bound on macOS)
 
 soundcode check  examples/signal-lost.v3.sc
 soundcode render examples/signal-lost.v3.sc -o out/mock.wav
+soundcode separate audio/test/song.mp3            # stems -> out/stems/song/
 soundcode encode audio/test/song.wav -o out/sc/song.sc --keep-work
 soundcode serve                                  # A/B listening, :8720
 ```
