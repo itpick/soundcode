@@ -31,6 +31,13 @@ _DRUM_VOICES = ("kick", "snare", "hat")
 # costs us :notes.* and :text.* — the streams that matter most — so the reason
 # is recorded in the file rather than left to be inferred from absences.
 STEM_FAILURE: list[str] = []
+# Separation succeeded but with caveats the .sc file must carry (a lossy sum
+# check, an unsplit vocal). Written as `# NOTE:` lines in the header.
+STEM_NOTES: list[str] = []
+
+# A lead stem this far below the backing stem means the karaoke model filed
+# the whole vocal as backing; melody and lyrics then use lead + backing.
+_LEAD_SILENT_DB = 20.0
 
 
 @dataclass
@@ -62,12 +69,18 @@ def load_audio(path: str, sr: int = 44100) -> tuple[np.ndarray, int]:
     return y, sr
 
 
-def encoder_stems(result) -> dict[str, Path]:
+def encoder_stems(result, notes: list[str]) -> dict[str, Path]:
     """Separation stems under the names the stages below expect. The lead
     vocal drives melody and lyrics; backing vocals are left for Milestone 2."""
     stems = {k: v for k, v in result.stems.items()
              if k in ("drums", "bass", "guitar", "piano", "other")}
-    stems["vocals"] = result.stems["lead_vocals"]
+    lead, backing = result.levels["lead_vocals"], result.levels["backing_vocals"]
+    if lead < backing - _LEAD_SILENT_DB:
+        stems["vocals"] = result.mixes["vocals"]
+        notes.append(f"lead vocal stem near-silent ({lead:.0f} dB vs backing "
+                     f"{backing:.0f} dB); vocals were not split into lead/backing")
+    else:
+        stems["vocals"] = result.stems["lead_vocals"]
     return stems
 
 
@@ -78,13 +91,19 @@ def separate_stems(path: str, workdir: Path) -> dict[str, Path]:
     _log("separating stems (RoFormer vocals, karaoke lead/backing, demucs 6-stem)")
     try:
         result = sep.separate(path, workdir / "stems")
-    except sep.SeparationError as exc:
-        _log(f"separation FAILED: {exc}")
-        STEM_FAILURE.append(str(exc))
+    except Exception as exc:  # fail soft on anything: encode from the mix
+        reason = str(exc) if isinstance(exc, sep.SeparationError) \
+            else f"{type(exc).__name__}: {exc}"
+        _log(f"separation FAILED: {reason}")
+        STEM_FAILURE.append(reason)
         return {}
     if not result.report.ok:
-        _log(f"stem sum check failed: residual {result.report.residual_db:.1f} dB")
-    return encoder_stems(result)
+        r = result.report
+        STEM_NOTES.append(f"stem sum check failed (level diff {r.level_diff_db:+.1f} dB, "
+                          f"residual {r.residual_db:.1f} dB); stem-derived streams "
+                          "are less reliable")
+        _log(STEM_NOTES[-1])
+    return encoder_stems(result, STEM_NOTES)
 
 
 def _module_available(name: str) -> bool:
@@ -540,6 +559,7 @@ def encode(path: str, out_path: str | None = None,
     wd = Path(workdir or tempfile.mkdtemp(prefix="sc-")) / (src.stem + ".scw")
     wd.mkdir(parents=True, exist_ok=True)
     STEM_FAILURE.clear()
+    STEM_NOTES.clear()
 
     _log(f"loading {src.name}")
     y, sr = load_audio(str(src))
@@ -603,6 +623,11 @@ def encode(path: str, out_path: str | None = None,
             f"#   reason: {STEM_FAILURE[0]}",
             "",
         ]
+
+    for note in STEM_NOTES:
+        lines.append(f"# NOTE: {note}")
+    if STEM_NOTES:
+        lines.append("")
 
     if key:
         lines += [":tuning", "ref          A4 = 440.0Hz", "temperament  12tet", ""]

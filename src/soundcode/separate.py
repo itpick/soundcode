@@ -140,9 +140,12 @@ PASSES = (
 )
 
 # Loud masters decode above full scale, and audio-separator rescales any input
-# peaking over 0.9 without restoring the level, so every pass input is written
-# with its peak at or below HEADROOM and that gain is undone on its outputs.
-HEADROOM = 0.8
+# or output peaking over 0.9 without restoring the level. Every pass input is
+# written with its peak at or below HEADROOM (5 dB under that ceiling, since a
+# stem can peak above its input) and the gain is undone on the outputs; an
+# output that still reached the ceiling is reported in the warnings.
+HEADROOM = 0.5
+_MODEL_CEILING = 0.9
 
 _VOCAL_STEMS = ("lead_vocals", "backing_vocals")
 _OWNED = (*STEMS, "vocals", "instrumental", "residual")
@@ -164,15 +167,21 @@ def separate(audio: Path | str, out_dir: Path | str,
     """Split `audio` into STEMS under `out_dir`. See the module docstring."""
     src, out = Path(audio), Path(out_dir)
     backend = backend or AudioSeparatorBackend()
+    owned = [out / f"{name}.wav" for name in _OWNED] + [out / "manifest.json"]
+    if src.resolve() in {p.resolve() for p in owned}:
+        raise SeparationError(f"refusing to overwrite the input {src} with a stem; "
+                              "choose another output folder")
+
+    # read before touching anything, so a bad input leaves the last run intact
+    mix = read_stereo(src)
+    n = mix.shape[1]
+
     out.mkdir(parents=True, exist_ok=True)
     work = out / "_work"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir()
-    for name in _OWNED:
-        (out / f"{name}.wav").unlink(missing_ok=True)
-
-    mix = read_stereo(src)
-    n = mix.shape[1]
+    for p in owned:
+        p.unlink(missing_ok=True)
     # models see a plain-named copy of exactly the audio we sum-check against
     inputs: dict[str, tuple[Path, float]] = {"mix": _write_input(work / "mix.wav", mix)}
 
@@ -190,7 +199,11 @@ def separate(audio: Path | str, out_dir: Path | str,
             if label not in produced:
                 warnings.append(f"{p.model} produced no '{label}' output")
                 continue
-            y = read_stereo(produced[label], length=n) / gain
+            y = read_stereo(produced[label], length=n)
+            if float(np.abs(y).max()) >= _MODEL_CEILING - 1e-3:
+                warnings.append(f"{p.model} '{label}' output hit the {_MODEL_CEILING} "
+                                "ceiling and was probably rescaled by the model")
+            y = y / gain
             audio_by_name[name] = audio_by_name.get(name, 0) + y
             # intermediate results become inputs for later passes
             if name not in STEMS:

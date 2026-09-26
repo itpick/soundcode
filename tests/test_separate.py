@@ -239,7 +239,7 @@ def test_encoder_stems_maps_lead_vocals_to_vocals(tmp_path):
     src = tmp_path / "a.wav"
     sf.write(str(src), tone(220, 0.5).T, SR)
     res = sep.separate(src, tmp_path / "out", backend=FakeBackend())
-    stems = enc.encoder_stems(res)
+    stems = enc.encoder_stems(res, [])
     assert stems["vocals"] == res.stems["lead_vocals"]
     assert {"drums", "bass", "guitar", "piano", "other"} <= set(stems)
 
@@ -291,3 +291,99 @@ def test_loud_master_over_full_scale_still_rebuilds_the_mix(tmp_path):
     res = sep.separate(src, tmp_path / "out", backend=NormalisingBackend())
     assert res.report.ok
     assert abs(res.report.level_diff_db) < 0.01
+
+
+# --- final-review fixes ------------------------------------------------------------
+
+def test_refuses_to_overwrite_its_own_input(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    src = out / "vocals.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    with pytest.raises(sep.SeparationError, match="overwrite"):
+        sep.separate(src, out, backend=FakeBackend())
+    assert src.exists()
+
+
+def test_unreadable_input_leaves_previous_run_intact(tmp_path):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    out = tmp_path / "out"
+    sep.separate(src, out, backend=FakeBackend())
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"not audio at all")
+    with pytest.raises(Exception):
+        sep.separate(bad, out, backend=FakeBackend())
+    assert (out / "drums.wav").exists()
+
+
+def test_failed_rerun_removes_the_old_manifest(tmp_path):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    out = tmp_path / "out"
+    sep.separate(src, out, backend=FakeBackend())
+    with pytest.raises(sep.SeparationError):
+        sep.separate(src, out, backend=FakeBackend(fail_on="karaoke"))
+    assert not (out / "manifest.json").exists()
+
+
+class OutputNormalisingBackend(FakeBackend):
+    """Like audio-separator: any output peaking over 0.9 is scaled to 0.9.
+    Outputs are first boosted 2.5x, since a real stem can peak above the mix
+    it came from (the mix partly cancels it)."""
+
+    def run(self, model, audio, out_dir):
+        out = super().run(model, audio, out_dir)
+        for p in out.values():
+            y, _ = sf.read(str(p), always_2d=True)
+            y = y * 2.5
+            peak = float(np.abs(y).max())
+            sf.write(str(p), y * (0.9 / peak if peak > 0.9 else 1.0), SR,
+                     subtype="FLOAT")
+        return out
+
+
+def test_output_rescale_is_flagged_in_warnings(tmp_path, monkeypatch):
+    monkeypatch.setattr(sep, "HEADROOM", 1.0)   # force outputs over 0.9
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5, amp=0.8).T, SR, subtype="FLOAT")
+    res = sep.separate(src, tmp_path / "out", backend=OutputNormalisingBackend())
+    assert any("rescaled" in w for w in res.warnings)
+
+
+def test_headroom_leaves_room_below_the_models_0_9_ceiling():
+    assert sep.HEADROOM <= 0.5
+
+
+class SilentLeadBackend(FakeBackend):
+    GAINS = {**FakeBackend.GAINS, "karaoke": {"vocals": 0.0, "instrumental": 1.0}}
+
+
+def test_encoder_uses_full_vocals_when_lead_stem_is_silent(tmp_path):
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    res = sep.separate(src, tmp_path / "out", backend=SilentLeadBackend())
+    notes: list[str] = []
+    stems = enc.encoder_stems(res, notes)
+    assert stems["vocals"] == res.mixes["vocals"]
+    assert any("lead" in n for n in notes)
+
+
+def test_separate_stems_is_fail_soft_on_any_error(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(sep, "separate", boom)
+    enc.STEM_FAILURE.clear()
+    assert enc.separate_stems("x.wav", tmp_path) == {}
+    assert "No space left" in enc.STEM_FAILURE[0]
+
+
+def test_failed_sum_check_is_noted(tmp_path, monkeypatch):
+    class Lossy(FakeBackend):
+        GAINS = {**FakeBackend.GAINS, "vocals": {"vocals": 0.2, "instrumental": 0.3}}
+    monkeypatch.setattr(sep, "AudioSeparatorBackend", Lossy)
+    src = tmp_path / "a.wav"
+    sf.write(str(src), tone(220, 0.5).T, SR)
+    enc.STEM_NOTES.clear()
+    assert enc.separate_stems(str(src), tmp_path / "wd")
+    assert any("sum check" in n for n in enc.STEM_NOTES)
