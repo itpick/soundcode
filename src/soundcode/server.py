@@ -42,11 +42,15 @@ def _discover_tracks() -> list[dict]:
     for path in sorted(out.rglob("*")):
         if path.suffix.lower() not in (".wav", ".mp3", ".flac", ".ogg"):
             continue
+        if "_work" in path.relative_to(out).parts:
+            continue              # separation intermediates, not for listening
         rel = path.relative_to(root)
         stat = path.stat()
         label = str(path.relative_to(out).with_suffix(""))
         if label.startswith("ref/") or "reference" in label:
             kind = "ref"          # the original recording we are aiming at
+        elif label.startswith("stems/"):
+            kind = "stem"
         elif "mock" in label:
             kind = "mock"
         elif "cover" in label:
@@ -64,7 +68,7 @@ def _discover_tracks() -> list[dict]:
             "bytes": stat.st_size,
             "mtime": stat.st_mtime,
         })
-    order = {"ref": 0, "mock": 1, "cover": 2, "other": 3}
+    order = {"ref": 0, "mock": 1, "cover": 2, "stem": 3, "other": 4}
     tracks.sort(key=lambda t: (order.get(t["kind"], 9), t["strength"] or 0, t["label"]))
     return tracks
 

@@ -251,3 +251,21 @@ def test_separate_stems_records_failure_and_returns_empty(tmp_path, monkeypatch)
     enc.STEM_FAILURE.clear()
     assert enc.separate_stems(str(src), tmp_path / "wd") == {}
     assert "htdemucs" in enc.STEM_FAILURE[0]
+
+
+# --- listening server ------------------------------------------------------------
+
+from soundcode import server  # noqa: E402
+
+
+def test_server_lists_stems_and_hides_work_files(tmp_path, monkeypatch):
+    d = tmp_path / "out" / "stems" / "song"
+    (d / "_work" / "pass1").mkdir(parents=True)
+    for name in ("lead_vocals.wav", "instrumental.wav", "_work/mix.wav",
+                 "_work/pass1/x_(Vocals)_m.wav"):
+        (d / name).write_bytes(b"RIFF")
+    monkeypatch.setenv("SOUNDCODE_ROOT", str(tmp_path))
+    tracks = server._discover_tracks()
+    labels = {t["label"]: t["kind"] for t in tracks}
+    assert labels == {"stems/song/lead_vocals": "stem",
+                      "stems/song/instrumental": "stem"}
