@@ -41,13 +41,18 @@ the original. Results on the M1 Max:
 | 999999 | 30 s | +0.09 dB | −19.2 dB | 112 s |
 | corona_radiata | 30 s | −0.49 dB | −19.1 dB | 99 s |
 | discipline | 30 s | −0.14 dB | −23.0 dB | 91 s |
-| lights_in_the_sky | 30 s | −0.68 dB | −15.5 dB | 88 s |
+| lights_in_the_sky | 30 s | −0.7 dB | −14.0 to −15.5 dB (borderline) | 88 s |
 | The River (full song) | 196 s | −0.10 dB | −22.0 dB | 573 s |
 
 Pass = level within ±1 dB and residual ≤ −15 dB. Times include model loading
-(about 2.9× real time on a full song). The karaoke model sometimes files a
-heavily processed lead as backing vocals (lights_in_the_sky: lead ≈ silent);
-lead/backing splitting is revisited in Milestone 2.
+(about 2.9× real time on a full song). Results vary by about 1 dB between runs
+(Demucs uses random time shifts), so lights_in_the_sky sits on the line and
+fails about half the time; its losses are in the Demucs pass.
+
+The karaoke model sometimes files the whole vocal as backing (corona_radiata:
+lead stem ≈ silent). `encode` detects this and transcribes lead + backing
+together, with a `# NOTE:` in the `.sc` header. Proper lead/backing splitting is
+Milestone 2.
 
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 

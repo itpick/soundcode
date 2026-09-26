@@ -141,10 +141,10 @@ PASSES = (
 
 # Loud masters decode above full scale, and audio-separator rescales any input
 # or output peaking over 0.9 without restoring the level. Every pass input is
-# written with its peak at or below HEADROOM (5 dB under that ceiling, since a
-# stem can peak above its input) and the gain is undone on the outputs; an
-# output that still reached the ceiling is reported in the warnings.
-HEADROOM = 0.5
+# written with its peak at or below HEADROOM and the gain is undone on the
+# outputs; a stem can peak above its input, so an output that still reached
+# the ceiling is reported in the warnings.
+HEADROOM = 0.8
 _MODEL_CEILING = 0.9
 
 _VOCAL_STEMS = ("lead_vocals", "backing_vocals")

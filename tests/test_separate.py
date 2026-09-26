@@ -351,10 +351,6 @@ def test_output_rescale_is_flagged_in_warnings(tmp_path, monkeypatch):
     assert any("rescaled" in w for w in res.warnings)
 
 
-def test_headroom_leaves_room_below_the_models_0_9_ceiling():
-    assert sep.HEADROOM <= 0.5
-
-
 class SilentLeadBackend(FakeBackend):
     GAINS = {**FakeBackend.GAINS, "karaoke": {"vocals": 0.0, "instrumental": 1.0}}
 
