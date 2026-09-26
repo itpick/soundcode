@@ -269,3 +269,25 @@ def test_server_lists_stems_and_hides_work_files(tmp_path, monkeypatch):
     labels = {t["label"]: t["kind"] for t in tracks}
     assert labels == {"stems/song/lead_vocals": "stem",
                       "stems/song/instrumental": "stem"}
+
+
+# --- loud masters ------------------------------------------------------------------
+
+class NormalisingBackend(FakeBackend):
+    """Like audio-separator's default: input whose peak exceeds 0.9 is scaled
+    down to 0.9 before separating, and the outputs stay at that lower level."""
+
+    def run(self, model, audio, out_dir):
+        y, _ = sf.read(str(audio), always_2d=True)
+        peak = float(np.abs(y).max())
+        if peak > 0.9:
+            sf.write(str(audio), y * (0.9 / peak), SR, subtype="FLOAT")
+        return super().run(model, audio, out_dir)
+
+
+def test_loud_master_over_full_scale_still_rebuilds_the_mix(tmp_path):
+    src = tmp_path / "loud.wav"
+    sf.write(str(src), tone(220, 0.5, amp=1.1).T, SR, subtype="FLOAT")
+    res = sep.separate(src, tmp_path / "out", backend=NormalisingBackend())
+    assert res.report.ok
+    assert abs(res.report.level_diff_db) < 0.01

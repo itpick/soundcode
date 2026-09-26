@@ -139,6 +139,11 @@ PASSES = (
           "piano": "piano", "other": "other", "vocals": "other"}),
 )
 
+# Loud masters decode above full scale, and audio-separator rescales any input
+# peaking over 0.9 without restoring the level, so every pass input is written
+# with its peak at or below HEADROOM and that gain is undone on its outputs.
+HEADROOM = 0.8
+
 _VOCAL_STEMS = ("lead_vocals", "backing_vocals")
 _OWNED = (*STEMS, "vocals", "instrumental", "residual")
 
@@ -169,28 +174,27 @@ def separate(audio: Path | str, out_dir: Path | str,
     mix = read_stereo(src)
     n = mix.shape[1]
     # models see a plain-named copy of exactly the audio we sum-check against
-    inputs: dict[str, Path] = {"mix": work / "mix.wav"}
-    write_wav(inputs["mix"], mix)
+    inputs: dict[str, tuple[Path, float]] = {"mix": _write_input(work / "mix.wav", mix)}
 
     audio_by_name: dict[str, np.ndarray] = {}
     warnings: list[str] = []
     for i, p in enumerate(PASSES, 1):
         pass_dir = work / f"pass{i}"
         pass_dir.mkdir()
+        in_path, gain = inputs[p.source]
         try:
-            produced = backend.run(p.model, inputs[p.source], pass_dir)
+            produced = backend.run(p.model, in_path, pass_dir)
         except Exception as exc:  # any model/backend failure
             raise SeparationError(f"{p.model}: {exc}") from exc
         for label, name in p.outputs.items():
             if label not in produced:
                 warnings.append(f"{p.model} produced no '{label}' output")
                 continue
-            y = read_stereo(produced[label], length=n)
+            y = read_stereo(produced[label], length=n) / gain
             audio_by_name[name] = audio_by_name.get(name, 0) + y
             # intermediate results become inputs for later passes
             if name not in STEMS:
-                inputs[name] = work / f"{name}.wav"
-                write_wav(inputs[name], audio_by_name[name])
+                inputs[name] = _write_input(work / f"{name}.wav", audio_by_name[name])
 
     stems_audio = {s: audio_by_name.get(s, np.zeros_like(mix)) for s in STEMS}
     for s in STEMS:
@@ -215,6 +219,14 @@ def separate(audio: Path | str, out_dir: Path | str,
     result = SeparationResult(src, out, stems, mixes, levels, report, warnings)
     _write_manifest(result, n)
     return result
+
+
+def _write_input(path: Path, y: np.ndarray) -> tuple[Path, float]:
+    """Write a model input with its peak at or below HEADROOM; return the gain."""
+    peak = float(np.abs(y).max())
+    gain = HEADROOM / peak if peak > HEADROOM else 1.0
+    write_wav(path, y * gain)
+    return path, gain
 
 
 def _finite(x: float) -> float | None:
