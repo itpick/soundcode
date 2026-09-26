@@ -22,31 +22,47 @@ Order: 1 first → 2 and 3 in parallel → 4 → 5.
 | Copyrighted lyrics | May be stored in encoded `.sc` files and work dirs, private only. `out/` and `audio/` stay gitignored, the server stays bound to 127.0.0.1, and the GitHub repo stays private. Committed fixtures and examples contain no third-party lyrics. |
 | Meaning of "re-render" | Both: a generative cover/remix (ACE-Step) **and** a deterministic rebuild from stems + automation |
 
-## Model stack (Mac-local first; NC allowed)
+## Model stack (open, free, Mac-local first; NC allowed; no paid APIs)
+
+Full detail: [open codifying](../../research/2026-09-26-open-codifying.md) · [open synthesis](../../research/2026-09-26-open-synthesis.md)
+
+### Codifying (audio → `.sc`)
 
 | Job | Default | Alternatives / experiments |
 |---|---|---|
-| Separation | audio-separator (BS-RoFormer vocals) + Demucs 4.1 `htdemucs_ft` (MPS) | Mel-Band RoFormer, SCNet |
-| Beats and downbeats | `beat_this` 1.1 | SheetSage2, madmom (git) |
-| Structure | SongFormer | SheetSage2; novelty fallback snapped to downbeats |
-| Chords and key | **SheetSage2** (NC; one model covers beats, key, chords, structure and melody) | ChordMini/BTC + Essentia key |
-| Notes | basic-pitch (bass/other); penn or torchcrepe for monophonic vocals | YourMT3+, VocalParse |
-| Timbre / description | msclap tags + MOSS-Music 8B (MLX) captions | Gemini audio-in |
-| Lyrics ASR | Qwen3-ASR 1.7B + Qwen3-ForcedAligner (`mlx-qwen3-asr`) | WhisperX; MOSS-Music as a second opinion |
-| Web lyrics | AcoustID → MusicBrainz → LRCLIB, then `ctc-forced-aligner` on the vocal stem | Musixmatch, AudD |
-| `.sc` authoring LLM | Claude Opus 5.5 / Fable 5.1 (structured output) | Local Qwen3.5-27B (MLX) |
-| Audio decoder | ACE-Step 1.5 (remix/cover/repaint) | MuLaCover (NC; melody+chord MIDI conditioning; needs CUDA, so rent a GPU), YuE2 (NC, CUDA), ElevenLabs Music API |
+| Separation | audio-separator: BS-RoFormer vocals → karaoke RoFormer lead/backing → Demucs `htdemucs_6s` | Mel-Band RoFormer, SCNet, DrumSep for drum kit pieces |
+| Beats, key, chords, structure, lead melody | **SheetSage2** on the full mix (CC BY-NC) | `beat_this` 1.1, SongFormer, ChordMini + Essentia |
+| Drums | DrumSep → ADTOF | onset templates (current) |
+| Piano | Transkun | basic-pitch |
+| Bass / other notes | basic-pitch | MuScriptor, YourMT3+ |
+| Vocal pitch curve | torchcrepe | SwiftF0, penn |
+| Lyrics from audio | Qwen3-ASR 1.7B + Qwen3-ForcedAligner (`mlx-qwen3-asr`) | WhisperX; MOSS-Music as a second opinion |
+| Web lyrics | AcoustID → MusicBrainz → LRCLIB (free), then forced alignment on the vocal stem | — |
+| Listening helper (captions, descriptions, Q&A) | MOSS-Music-8B, 8-bit MLX | Qwen3-Omni (MLX). Never used for key, chords or tempo; dedicated models are far more accurate |
+| `.sc` authoring LLM | **Qwen3.8-27B** 4-bit MLX, constrained by a Lark grammar through Outlines (`mlxlm`) | Qwen3.6-35B-A3B for fast repair loops, gpt-oss-20b for checker triage, Gemma 4 31B; later QLoRA with `mlx_lm.lora` |
+| Interop | symusic (MIDI/ABC), music21 (MusicXML), JAMS + mir_eval (annotations, metrics) | MidiTok, abcMIDI, MuseScore 4.6 CLI, LilyPond |
+| Eval data | RWC-Popular, MUSDB18-HQ (+ lyrics), Slakh2100, JamendoLyrics, Harmonix | Lakh/MidiCaps rendered as a `.sc` training corpus |
 
-The research agent's version and release claims should be verified when each tool is adopted.
+### Synthesis (`.sc` → audio)
+
+| Job | Default | Alternatives / experiments |
+|---|---|---|
+| Singing from notes + lyrics | **DiffSinger** (openvpi `.ds` input: phonemes, durations, notes, explicit f0 so vibrato/slides carry through) | SoulX-Singer (CUDA) |
+| Re-sing in another voice | Seed-VC (Apple Silicon supported, zero-shot) | YingMusic-SVC; RVC/Applio when a voice must be trained |
+| Faithful instruments | tinysoundfont + GeneralUser GS; sfizz + free SFZ (Salamander, VPO, VSCO 2 CE); DawDreamer hosting Surge XT / Vital / Dexed; pedalboard for `:mix` | TokenSynth (neural) |
+| Generative full song | **ACE-Step 1.5** (installed; MIT; tempo/key/meter, cover, repaint) + DiffSynth-Music controls | MuLaCover (melody/chord/drum MIDI; rented GPU), YuE2 (editable ABC; MLX ports) |
+| Instrumental generation | ACE-Step lego/instrumental | MuseControlLite, Magenta RealTime 2, JASCO |
+
+The research agents' version and release claims should be verified when each tool is adopted; items flagged *(verify)* in the research files especially.
 Known pins: librosa `<1.0` while on Python 3.11. torchaudio forced alignment was removed in 2.9.
 
 ## Lyrics reconciliation
 
 1. Identify the song: AcoustID/Chromaprint → MusicBrainz (title, artist, duration).
-2. Fetch LRCLIB synced and plain lyrics. Musixmatch is an optional fallback.
+2. Fetch LRCLIB synced and plain lyrics (free, no key).
 3. Forced-align the web text to the vocal stem. LRCLIB line times serve as a ±1 s prior.
 4. Where the alignment score is low, fall back to ASR words (rapidfuzz/jiwer alignment, voting per word across sources). Unresolved words carry `?conf` / `alt=`.
-5. An LLM only chooses between candidates (ordering, section labels, casing) and never writes lyrics.
+5. An open LLM (local) only chooses between candidates (ordering, section labels, casing) and never writes lyrics.
 6. Record provenance per line: `src=lrclib|asr|aligned`.
 
 ## Phases
