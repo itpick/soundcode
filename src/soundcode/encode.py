@@ -27,6 +27,16 @@ warnings.filterwarnings("ignore")
 _PC_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 _DRUM_VOICES = ("kick", "snare", "hat")
 
+# basic-pitch reports pitch bend in 1/3-semitone bins, and an in-tune note
+# reads +1 bin (measured on pure tones), so that is the zero point.
+BASIC_PITCH_BEND_ZERO = 1.0
+
+
+def bend_to_cents(bend) -> float:
+    if bend is None or not np.size(bend):
+        return 0.0
+    return (float(np.mean(bend)) - BASIC_PITCH_BEND_ZERO) * 100.0 / 3.0
+
 # Populated by separate_stems() when separation fails. Stem loss silently
 # costs us :notes.* and :text.* — the streams that matter most — so the reason
 # is recorded in the file rather than left to be inferred from absences.
@@ -451,9 +461,7 @@ def stage_notes_poly(stem: Path | None, name: str, grid: dict,
             continue
         beat = round((pos - int(pos)) * 4 * 2) / 2 + 1
         beats = max(round(dur / beat_dur * 2) / 2, 0.5)
-        # basic-pitch reports pitch bend in 1/3-semitone bins around the note
-        cents = midi * 100 + (float(np.mean(bend)) * 100.0 / 3.0 if bend is not None
-                              and np.size(bend) else 0.0)
+        cents = midi * 100 + bend_to_cents(bend)
         vel = int(np.clip(20 + 107 * (amp / peak) ** 0.5, 1, 127))
         conf = float(np.clip(amp / peak, 0, 1))
         mark = "" if conf >= 0.80 else f" ?{conf:.2f}"
