@@ -89,3 +89,65 @@ def test_paths_are_passed_absolute_because_tsumugi_runs_in_its_own_dir(fake_home
     cmd = seen["cmd"]
     assert Path(cmd[cmd.index("--audio") + 1]).is_absolute()
     assert Path(cmd[cmd.index("--output-midi") + 1]).is_absolute()
+
+
+# --- MIDI -> .sc lines --------------------------------------------------------------------
+
+import pretty_midi  # noqa: E402
+from soundcode import tsumugi_sc as tsc  # noqa: E402
+
+GRID = {"downbeat": 1.0, "bar_dur": 2.0}          # 120 bpm, 4/4, bar 1 at 1.0 s
+
+
+def _midi(tmp_path, tracks):
+    pm = pretty_midi.PrettyMIDI()
+    for program, is_drum, notes in tracks:
+        inst = pretty_midi.Instrument(program=program, is_drum=is_drum)
+        for s, e, p, v in notes:
+            inst.notes.append(pretty_midi.Note(velocity=v, pitch=p, start=s, end=e))
+        pm.instruments.append(inst)
+    path = tmp_path / "t.mid"
+    pm.write(str(path))
+    return path
+
+
+def test_read_tracks_labels_by_program_and_drums(tmp_path):
+    p = _midi(tmp_path, [(5, False, [(1.0, 1.5, 60, 90)]), (0, True, [(1.0, 1.1, 39, 100)])])
+    tracks = tsc.read_tracks(p)
+    assert [(t.klass, t.inst) for t in tracks] == [("electric_piano", "keys.ep"),
+                                                   ("drums", "drums.kit.standard")]
+
+
+def test_positions_keep_performed_timing_and_pickups():
+    assert tsc.position(1.0, GRID) == "1:1.000"
+    assert tsc.position(1.0 + 0.5 + 0.0625, GRID) == "1:2.125"     # a 32nd after beat 2
+    assert tsc.position(3.0, GRID) == "2:1.000"
+    assert tsc.position(0.4, GRID) == "@0.400"                     # before the first downbeat
+
+
+def test_note_lines_pitched_and_drums():
+    t = tsc.Track("piano", "keys.piano", [(1.5625, 1.9375, 60, 88)])
+    assert tsc.note_lines(t, GRID) == ["1:2.125  C4  0.750b 88"]
+    d = tsc.Track("drums", "drums.kit.standard", [(3.0, 3.1, 39, 96)])
+    assert tsc.note_lines(d, GRID) == ["2:1.000 clap 96"]
+
+
+def test_bleed_tracks_are_dropped_with_a_reason():
+    big = tsc.Track("piano", "keys.piano", [(i, i + 0.5, 60, 90) for i in range(200)])
+    tiny = tsc.Track("strings", "strings.ensemble", [(0, 1, 60, 90), (1, 2, 62, 90)])
+    rare = tsc.Track("organ", "organ.drawbar", [(i, i + 0.5, 60, 90) for i in range(3)])
+    kept, why = tsc.drop_bleed([big, tiny, rare])
+    assert [t.klass for t in kept] == ["piano"]
+    assert any("strings" in w and "2 notes" in w for w in why)
+    assert any("organ" in w for w in why)                          # 3 of 205 < 2 %
+
+
+def test_empty_midi_gives_no_tracks(tmp_path):
+    assert tsc.read_tracks(_midi(tmp_path, [])) == []
+
+
+def test_stream_names_do_not_clash():
+    taken: set[str] = set()
+    assert tsc.stream_name("keys.piano", "piano", taken) == "notes.piano"
+    assert tsc.stream_name("keys.piano", "guitar", taken) == "notes.piano.guitar"
+    assert tsc.stream_name("keys.ep", "guitar", taken) == "notes.ep"
