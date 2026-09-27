@@ -201,16 +201,38 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
 
 
 def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
-           with_vocals: bool = False) -> np.ndarray:
+           with_vocals: bool = False, voice_ref: Path | None = None) -> np.ndarray:
     sr = sr or doc.sample_rate
-    return mix(doc, render_streams(doc, sr, sf2), sr, with_vocals)
+    streams = render_streams(doc, sr, sf2)
+    if with_vocals:
+        from . import sing
+        from .sing_score import vocal_stream
+        name = vocal_stream(doc)
+        wav, _ = sing.sing(doc, voice_ref)
+        streams[name] = _load_stream(wav, sr, max((y.shape[0] for y in streams.values()), default=0),
+                                     doc.stream(name))
+    return mix(doc, streams, sr, with_vocals)
+
+
+def _load_stream(path: Path, sr: int, n: int, stream) -> np.ndarray:
+    import librosa
+
+    y, _ = librosa.load(str(path), sr=sr, mono=True)
+    n = max(n, len(y))
+    out = np.zeros((n, 2), np.float32)
+    out[: len(y), 0] = out[: len(y), 1] = y
+    level = stream.meta.get("level") if stream is not None else None
+    have = _rms_db(out, sr)
+    if level is not None and np.isfinite(have):
+        out *= 10 ** ((float(level.rstrip("dB")) - have) / 20)
+    return out
 
 
 def render_to_file(doc: Document, path: str, sr: int | None = None,
-                   with_vocals: bool = False) -> tuple[int, float]:
+                   with_vocals: bool = False, voice_ref: Path | None = None) -> tuple[int, float]:
     import soundfile as sf
 
     sr = sr or doc.sample_rate
-    audio = render(doc, sr, with_vocals=with_vocals)
+    audio = render(doc, sr, with_vocals=with_vocals, voice_ref=voice_ref)
     sf.write(path, audio, sr, subtype="PCM_16")
     return len(expand(doc)), audio.shape[0] / sr

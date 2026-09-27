@@ -175,3 +175,90 @@ def test_diffsinger_sings_two_bars_at_the_requested_pitch():
     t = librosa.times_like(f0, sr=ss.SR)
     seg = f0[(t > 1.3) & (t < 1.8) & v]                    # the E4 note
     assert len(seg) and abs(np.median(1200 * np.log2(seg / 329.63))) < 50
+
+
+# --- sing orchestrator + render --with-vocals ---------------------------------------------
+
+from soundcode import render_sf, sing  # noqa: E402
+
+
+def test_voice_ref_defaults_to_the_songs_lead_stem(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    d = tmp_path / "out" / "stems" / "river-30s"
+    d.mkdir(parents=True)
+    (d / "lead_vocals.wav").write_bytes(b"RIFF")
+    doc = parse("%sc 0.3\n@source river-30s.wav\n")
+    assert sing.voice_ref(doc, None) == Path("out/stems/river-30s/lead_vocals.wav")
+    with pytest.raises(ss.SingError, match="--voice-ref"):
+        sing.voice_ref(parse("%sc 0.3\n@source other.wav\n"), None)
+
+
+def test_cache_key_changes_with_every_input(tmp_path):
+    ref = tmp_path / "r.wav"
+    ref.write_bytes(b"x")
+    k = sing.cache_key(parse(SONG), ref, {"steps": 30})
+    assert k != sing.cache_key(parse(SONG.replace("E4", "F4")), ref, {"steps": 30})
+    assert k != sing.cache_key(parse(SONG.replace('"river"', '"rover"')), ref, {"steps": 30})
+    assert k != sing.cache_key(parse(SONG + "\n:contour.vox rate=50\nf0  @0.1  6000\n"), ref, {"steps": 30})
+    assert k != sing.cache_key(parse(SONG), ref, {"steps": 50})
+
+
+def test_sing_uses_the_cache_and_chains_the_engines(tmp_path, monkeypatch):
+    import soundfile as sf
+    ref = tmp_path / "ref.wav"
+    sf.write(str(ref), np.zeros(4410, np.float32), 44100)
+    calls = []
+    monkeypatch.setattr(sing.diffsinger, "render", lambda score, **k: calls.append("ds") or np.zeros(44100, np.float32))
+    def fake_convert(src, r, out, steps=30):
+        calls.append("vc"); sf.write(str(out), np.zeros(44100, np.float32), 44100); return out
+    monkeypatch.setattr(sing.seedvc, "convert", fake_convert)
+    p1, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c")
+    p2, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c")
+    assert p1 == p2 and p1.exists() and calls == ["ds", "vc"]
+
+
+def test_render_with_vocals_mixes_the_sung_stream_level_matched(tmp_path, monkeypatch):
+    import soundfile as sf
+    sung = tmp_path / "sung.wav"
+    t = np.arange(44100 * 4) / 44100
+    sf.write(str(sung), (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32), 44100)
+    monkeypatch.setattr(sing, "sing", lambda doc, ref=None, **k: (sung, []))
+    doc = parse(SONG.replace("meta stem=lead_vocals", "meta stem=lead_vocals level=-30.0"))
+    keys = np.zeros((44100 * 5, 2), np.float32)
+    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None: {"notes.lead": keys})
+    without = render_sf.render(doc, 44100)
+    with_v = render_sf.render(doc, 44100, with_vocals=True)
+    assert np.abs(without).max() == 0 and np.abs(with_v).max() > 0.1
+
+
+def test_seedvc_runs_on_the_remote_gpu_host_when_configured(tmp_path, monkeypatch):
+    """SOUNDCODE_SEEDVC_HOST: copy inputs over, run there, copy the result back."""
+    import subprocess
+    from soundcode import seedvc
+    monkeypatch.setenv("SOUNDCODE_SEEDVC_HOST", "gpubox")
+    src, ref, out = tmp_path / "s.wav", tmp_path / "r.wav", tmp_path / "o" / "v.wav"
+    src.write_bytes(b"s"); ref.write_bytes(b"r")
+    cmds = []
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        if cmd[0] == "scp" and not cmd[-1].startswith("gpubox:"):      # fetch back
+            Path(cmd[-1]).write_bytes(b"converted")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(seedvc.subprocess, "run", fake_run)
+    got = seedvc.convert(src, ref, out, steps=30)
+    assert got == out.resolve() and out.read_bytes() == b"converted"
+    kinds = [c[0] for c in cmds]
+    assert kinds[:2] == ["ssh", "scp"] and "ssh" in kinds[2:] and kinds[-1] == "ssh"   # mkdir, push, run, fetch, cleanup
+    run = next(c for c in cmds[2:] if c[0] == "ssh")
+    assert "inference.py" in run[-1] and "--diffusion-steps 30" in run[-1]
+
+
+def test_remote_failure_is_a_sing_error(tmp_path, monkeypatch):
+    import subprocess
+    from soundcode import seedvc
+    monkeypatch.setenv("SOUNDCODE_SEEDVC_HOST", "gpubox")
+    (tmp_path / "s.wav").write_bytes(b"s"); (tmp_path / "r.wav").write_bytes(b"r")
+    monkeypatch.setattr(seedvc.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 255, "", "ssh: connect to host gpubox: timed out"))
+    with pytest.raises(ss.SingError, match="gpubox"):
+        seedvc.convert(tmp_path / "s.wav", tmp_path / "r.wav", tmp_path / "v.wav")

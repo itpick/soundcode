@@ -83,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("--sr", type=int, default=None)
     p_render.add_argument("--engine", choices=("sf2", "mock"), default="sf2",
                           help="sf2: sampled instruments (default); mock: crude synth")
+    p_render.add_argument("--voice-ref", default=None,
+                          help="the original singer (wav); default out/stems/<source>/lead_vocals.wav")
     p_render.add_argument("--with-vocals", action="store_true",
                           help="include vocal streams (sf2 engine leaves them out by default)")
 
@@ -122,14 +124,17 @@ def main(argv: list[str] | None = None) -> int:
                 from . import render_sf
 
                 def render_to_file(doc, out, sr):
-                    return render_sf.render_to_file(doc, out, sr, with_vocals=args.with_vocals)
+                    return render_sf.render_to_file(
+                        doc, out, sr, with_vocals=args.with_vocals,
+                        voice_ref=Path(args.voice_ref) if args.voice_ref else None)
                 suffix = ".render.wav"
             out = args.out or str(Path(args.file).with_suffix(suffix))
             try:
                 count, secs = render_to_file(doc, out, args.sr)
             except Exception as exc:
                 from .render_sf import SoundFontError
-                if isinstance(exc, SoundFontError):
+                from .sing_score import SingError
+                if isinstance(exc, (SoundFontError, SingError)):
                     print(f"render failed: {exc}", file=sys.stderr)
                     return 2
                 raise

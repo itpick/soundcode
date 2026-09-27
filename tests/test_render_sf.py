@@ -204,7 +204,7 @@ def test_cli_render_with_vocals_flag(tmp_path, monkeypatch):
     sc.write_text(SCALE_SC)
     seen = {}
     monkeypatch.setattr(render_sf, "render_to_file",
-                        lambda doc, path, sr=None, with_vocals=False:
+                        lambda doc, path, sr=None, with_vocals=False, **k:
                         seen.setdefault("v", with_vocals) is not None and (1, 1.0))
     cli.main(["render", str(sc), "--with-vocals"])
     assert seen["v"] is True
