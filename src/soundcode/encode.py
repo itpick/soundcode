@@ -779,6 +779,26 @@ def stage_contour(stem: Path | None, stem_name: str, mix: np.ndarray, sr: int) -
     return st
 
 
+def lyric_cells(words: list[tuple[float, float, str, float]], grid: dict) -> list[str]:
+    """Words at performed timing (3-decimal beats), with durations."""
+    from . import tsumugi_sc as tsc
+
+    beat_s = grid["bar_dur"] / 4
+    cells, last = [], None
+    for start, end, word, prob in sorted(words, key=lambda w: w[0]):
+        if not word:
+            continue
+        if last is not None:
+            start = max(start, last + 0.02)            # collisions: nudge 20 ms apart
+        last = start
+        pos = tsc.position(start, grid)
+        dur = max(end - start, 0.05)
+        d = f"{dur:.3f}s" if pos.startswith("@") else f"{dur / beat_s:.3f}b"
+        mark = "" if prob >= 0.80 else f" ?{prob:.2f}"
+        cells.append(f'{pos} "{word}" {d}{mark}')
+    return cells
+
+
 def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
     """Word-level lyrics from the vocal stem, if a Whisper backend is present."""
     st = Stage("text.vox", src="whisper")
@@ -793,33 +813,22 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
             from faster_whisper import WhisperModel
             model = WhisperModel("base", device="cpu", compute_type="int8")
             segments, _ = model.transcribe(str(stem), word_timestamps=True)
-            words = [(w.start, w.word.strip(), w.probability)
+            words = [(w.start, w.end, w.word.strip(), w.probability)
                      for s in segments for w in (s.words or [])]
         else:
             import whisper
             model = whisper.load_model("base")
             res = model.transcribe(str(stem), word_timestamps=True)
-            words = [(w["start"], w["word"].strip(), w.get("probability", 0.8))
+            words = [(w["start"], w["end"], w["word"].strip(), w.get("probability", 0.8))
                      for s in res["segments"] for w in s.get("words", [])]
     except Exception as exc:                             # noqa: BLE001
         st.warns.append(f"transcription failed: {exc}")
         return st
 
-    bar_dur, downbeat = grid["bar_dur"], grid["downbeat"]
-    cells = []
-    for t, word, prob in words:
-        if not word:
-            continue
-        pos = (t - downbeat) / bar_dur
-        bar = int(pos) + 1
-        if bar < 1:
-            continue
-        beat = round((pos - int(pos)) * 4 * 2) / 2 + 1
-        mark = "" if prob >= 0.80 else f" ?{prob:.2f}"
-        cells.append(f'{bar}:{beat:.1f} "{word}"{mark}')
+    cells = lyric_cells(words, grid)
     for i in range(0, len(cells), 5):
         st.lines.append(" | ".join(cells[i:i + 5]))
-    st.conf = float(np.mean([p for _, _, p in words])) if words else 0.0
+    st.conf = float(np.mean([w[3] for w in words])) if words else 0.0
     st.ok = bool(st.lines)
     return st
 

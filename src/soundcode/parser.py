@@ -127,6 +127,9 @@ def parse_event(text: str) -> Event:
     if rest and rest[0].startswith('"'):
         ev.text = rest[0].strip('"')
         rest = rest[1:]
+        if rest and _DUR_RE.match(rest[0]):
+            ev.dur = rest[0]
+            rest = rest[1:]
     elif rest and not _BLOCK_RE.match(rest[0]) and not rest[0].startswith("?"):
         ev.atom = rest[0]
         rest = rest[1:]

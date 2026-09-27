@@ -54,3 +54,28 @@ def test_stage_contour_on_a_gated_stem_writes_nothing(tmp_path):
     sf.write(str(p), np.zeros(sr * 4, np.float32), sr)
     st = enc.stage_contour(p, "lead_vocals", np.random.default_rng(0).standard_normal(sr * 4) * 0.1, sr)
     assert not st.ok
+
+
+# --- lyrics as performed ------------------------------------------------------------------
+
+from soundcode import encode as enc  # noqa: E402
+
+GRID = {"downbeat": 1.0, "bar_dur": 2.0}
+
+
+def test_text_events_keep_their_duration():
+    doc = parse('%sc 0.3\n\n:text.vox\n1:2.125 "river" 0.500b ?0.71\n@0.400 "I" 0.200s\n')
+    evs = doc.stream("text.vox").events
+    assert [(e.text, e.dur) for e in evs] == [("river", "0.500b"), ("I", "0.200s")]
+
+
+def test_lyric_cells_use_performed_timing_and_durations():
+    words = [(1.5625, 1.9375, "river", 0.9), (0.4, 0.6, "I", 0.5)]
+    cells = enc.lyric_cells(words, GRID)
+    assert cells == ['@0.400 "I" 0.200s ?0.50', '1:2.125 "river" 0.750b']   # chronological
+
+
+def test_colliding_words_are_nudged_20ms():
+    words = [(1.5, 1.8, "a", 0.9), (1.5, 1.9, "b", 0.9)]
+    cells = enc.lyric_cells(words, GRID)
+    assert cells[1].startswith("1:2.040")                         # +20 ms at 0.5 s per beat
