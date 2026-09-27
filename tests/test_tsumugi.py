@@ -151,3 +151,36 @@ def test_stream_names_do_not_clash():
     assert tsc.stream_name("keys.piano", "piano", taken) == "notes.piano"
     assert tsc.stream_name("keys.piano", "guitar", taken) == "notes.piano.guitar"
     assert tsc.stream_name("keys.ep", "guitar", taken) == "notes.ep"
+
+
+# --- inventory voting ------------------------------------------------------------------------
+
+from soundcode import gm, inventory as inv  # noqa: E402
+
+
+def _t(klass, onsets, pitch=60):
+    return tsc.Track(klass, gm.TSUMUGI[klass]["inst"], [(o, o + 0.3, pitch, 90) for o in onsets])
+
+
+def test_mix_votes_count_matching_notes_by_family():
+    stem = [_t("distorted_guitar", [1.0, 2.0, 3.0, 4.0])]
+    mix = [_t("electric_piano", [1.02, 2.01, 3.03]), _t("strings", [4.0])]
+    assert inv.mix_votes(stem, mix) == {"keys": 3, "strings": 1}
+
+
+def test_guitar_stem_that_the_mix_calls_keys_is_reassigned():
+    d = inv.decide("guitar", "gtr", [("distorted_guitar", 0.97)], {"keys": 8, "gtr": 1, "strings": 1})
+    assert d.family == "keys" and d.reassigned
+    assert "reassigned" in d.warn and "0.80" in d.warn
+
+
+def test_agreement_keeps_the_stem_family_with_combined_confidence():
+    d = inv.decide("piano", "keys", [("piano", 0.97)], {"keys": 9, "gtr": 1})
+    assert d.family == "keys" and not d.reassigned
+    assert abs(d.conf - 0.97 * 0.9) < 1e-9
+
+
+def test_too_few_votes_leaves_refinement_in_charge():
+    d = inv.decide("bass", "bass", [("electric_bass", 0.88)], {"keys": 3})
+    assert d.family == "bass" and not d.reassigned and d.conf == 0.88
+    assert "few mix votes" in d.warn
