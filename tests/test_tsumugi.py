@@ -312,3 +312,12 @@ def test_a_stem_split_into_many_small_tracks_is_not_dropped_as_bleed(tmp_path, m
                                         {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
     notes = [st for st in stages if st.name.startswith("notes.") and st.ok]
     assert len(notes) == 1 and len(notes[0].lines) == 60
+
+
+def test_a_long_drone_is_not_bleed():
+    """corona_radiata's bass is one F1 note held ~25 s: few notes, all music."""
+    drone = tsc.Track("electric_bass", "bass.electric", [(0.0, 24.7, 29, 90)])
+    blip = tsc.Track("strings", "strings.ensemble", [(3.0, 3.2, 60, 40)])
+    kept, why = tsc.drop_bleed([drone, blip])
+    assert [t.klass for t in kept] == ["electric_bass"]
+    assert any("strings" in w for w in why)

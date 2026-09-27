@@ -60,14 +60,20 @@ def note_lines(track: Track, grid: dict) -> list[str]:
     return lines
 
 
-def drop_bleed(tracks: list[Track], min_notes: int = 3,
-               min_share: float = 0.02) -> tuple[list[Track], list[str]]:
-    total = sum(len(t.notes) for t in tracks) or 1
+def drop_bleed(tracks: list[Track], min_notes: int = 3, min_share: float = 0.02,
+               min_sound_s: float = 2.0) -> tuple[list[Track], list[str]]:
+    """Drop tracks that are separation bleed. A track is kept when it has
+    enough notes *or* enough sounding time: a held drone is one note of music."""
+    def sounding(t: Track) -> float:
+        return sum(max(e - s, 0.0) for s, e, _, _ in t.notes)
+
+    total = sum(sounding(t) for t in tracks) or 1.0
     kept, why = [], []
     for t in tracks:
-        n = len(t.notes)
-        if n < min_notes or n / total < min_share:
-            why.append(f"{t.klass}: bleed ({n} notes, {n / total:.0%} of stem)")
+        n, dur = len(t.notes), sounding(t)
+        few = n < min_notes and dur < min_sound_s
+        if few or dur / total < min_share:
+            why.append(f"{t.klass}: bleed ({n} notes, {dur:.1f}s, {dur / total:.0%} of stem)")
         else:
             kept.append(t)
     return kept, why
