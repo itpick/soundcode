@@ -39,7 +39,7 @@ The spike also confirmed that `tinysoundfont` renders offline (A4 piano → 441 
 This step is built in this order:
 1. **Part A — `soundcode compare` and the sampled renderer.** These form the measuring baseline.
 2. **Part B — encoder fixes** found by `compare`: a loudness gate, stricter note filtering, level metadata, and the +33 cent pitch fix.
-3. **Part C — the instrument inventory** in the encoder.
+3. **Part C — the tsumugi transcription backbone and instrument inventory** (revised: adopt an existing analyser, then add more analysers that vote).
 
 Not included, each with a later step:
 
@@ -159,105 +159,62 @@ New module `src/soundcode/render_sf.py`. The existing `render.py` stays as the `
 - Synthetic tones at 110, 261.63 and 440 Hz transcribe within ±10 c of true pitch.
 - A tone +30 c sharp still reads sharp (between +15 and +45 c).
 
-## C. Instrument inventory (encoder)
+## C. Transcription backbone: tsumugi (revised 2026-09-26)
 
-New module `src/soundcode/instruments.py`. It runs after separation.
+**Decision.** The user chose to adopt an existing open-source analyser rather than build the tagger ensemble first. Research (`docs/research/2026-09-26-open-song-analyzers.md`) picked **tsumugi** (anime-song/tsumugi, MIT, code and weights). On the River clip:
+- the separator's "guitar" stem came out as piano 0.73 / e-piano 0.27, which matches the user's "piano and clapping";
+- the drum stem produced hand-clap hits;
+- each run took about 5 s per 30 s on MPS.
 
-**Vocabulary: every common instrument and the common synth sounds.** The coarse §4.3.6 list becomes the *family* level of a two-level taxonomy, `family.instrument[.variant]`, which the `inst=` dotted refinement already allows. The table lives in `src/soundcode/data/instruments.toml`. It is the single source for the encoder, the renderer and `compare`. It covers:
+tsumugi replaces basic-pitch, band-split drum onsets and zero-shot tagging. It is the first analyser in the pipeline; later analysers (ADT_STR for drums, MuScriptor as a mix-level second opinion) plug in beside it and vote.
 
-- **All 128 General MIDI melodic programs**, grouped into their 16 GM families:
-  - piano, chromatic percussion, organ, guitar, bass, strings, ensemble, brass, reed, pipe;
-  - synth lead, synth pad, synth effects, ethnic, percussive, sound effects.
+The larger taxonomy below (all 128 GM programs, drum machines, modern synth sounds) remains the vocabulary target. tsumugi's 36 classes map into it.
 
-  Examples: `keys.piano.grand`, `keys.ep.rhodes`, `keys.clav`, `mallet.vibraphone`, `organ.drawbar`, `gtr.acoustic.nylon`, `gtr.electric.clean`, `gtr.electric.overdrive`, `gtr.electric.distortion`, `bass.electric.finger`, `bass.fretless`, `bass.upright`, `strings.violin`, `strings.cello`, `strings.ensemble`, `strings.pizzicato`, `strings.harp`, `brass.trumpet`, `brass.section`, `winds.sax.alto`, `winds.flute`, `winds.clarinet`, `ethnic.sitar`, `voice.choir`.
+**Install.**
+- `scripts/install_tsumugi.sh` clones tsumugi into `external/tsumugi` (gitignored), pinned to the tested commit `020edc1`, then runs `uv sync --locked --python 3.11`.
+- Checkpoints download from Hugging Face on first use (about 55 MB each).
+- `$SOUNDCODE_TSUMUGI` overrides the path.
 
-- **Drum kits:**
-  - acoustic: `drums.kit.standard`, `.room`, `.power`, `.jazz`, `.brush`, `.orchestral`;
-  - machines: `drums.machine.808`, `.909`, `.707`, `.linndrum`, `.electronic`;
-  - hand percussion: `perc.hand` (congas, bongos, shaker, tambourine).
+It runs in its own venv as a subprocess, as ACE-Step does, because it pins its own PyTorch.
 
-- **Common modern synth sounds**, beyond GM's synth programs:
+**Wrapper: new module `src/soundcode/tsumugi.py`.**
+- `transcribe_stem(stem_wav, stem_name, out_dir) -> Path` runs `python -m instrument_agnostic_amt.amt.cli.infer --audio … --output-midi … --type <T> --device mps --disable-tqdm`. The model type by stem:
 
-  | Group | Sounds |
+  | Stem | Model type |
   |---|---|
-  | Bass | `synth.bass.sub`, `.808`, `.reese`, `.acid` (303), `.fm`, `.wobble`, `.pluck` |
-  | Lead | `synth.lead.supersaw`, `.saw`, `.square`, `.sine`, `.pluck`, `.arp` |
-  | Pad | `synth.pad.warm`, `.strings`, `.choir`, `.ambient`, `.sweep` |
-  | Keys | `synth.keys.fm` (DX7-style), `synth.stab.chord`, `synth.stab.brass`, `synth.stab.hoover` |
-  | FX | `fx.riser`, `fx.downlifter`, `fx.impact`, `fx.noise` |
+  | piano | `default` |
+  | guitar | `guitar_v1_5` |
+  | bass | `bass_v2` |
+  | other | `other_v1_5` |
+  | drums | `drums_v1_5` |
+  | lead_vocals / vocals | `vocal_harmony_v1_5` |
 
-- **Voices:** `voice.lead`, `voice.backing`, `voice.choir`, `voice.speech`, `voice.rap`.
-- Plus `other` and `unknown`.
+- `refine(stem_wav, midi, stem_name, out_dir) -> dict` runs `python -m instrument_agnostic_amt.instrument_refinement.cli.infer --mode single --stem-name <stem> --output-json …` and returns class → probability.
+- `transcribe_mix(mix_wav, out_dir) -> Path` runs the unrestricted `default` model on the full mix, for cross-checking.
+- The velocity model (`instrument_agnostic_amt.velocity.cli.infer_velocity`) runs on the stems directory when available, because dynamics matter for a near-original rebuild. Without it, every note has velocity 100.
+- If the tool is missing or any call fails, it raises `TsumugiError`. The encoder then falls back to the current basic-pitch path and writes a `meta warn`.
 
-Each entry carries:
-- its family;
-- two or three text prompts for zero-shot classifiers;
-- a render target.
+**Instrument inventory: several sources voting.** For each stem that passes the loudness gate:
+1. **Refinement under the stem's own prior** gives a class and probability, e.g. guitar stem → `distorted_guitar 0.97`.
+2. **The mix-level unrestricted run** attributes notes to classes with no stem prior. For the stem's notes, the notes that match mix notes (onset ±50 ms, pitch ±1 semitone) vote for the mix note's family.
+3. **The stem name** is a prior, not a decision.
 
-**Render targets.**
-- Every entry maps to a GM program, or to a GM drum kit (bank 128 presets: Standard, Room, Power, Electronic, TR-808, Jazz, Brush, Orchestra), so everything renders today.
-- Modern synth sounds use the nearest GM program for now, e.g. `synth.lead.supersaw` → Lead 2 (sawtooth), `synth.bass.808` → Synth Bass 1 with a long release, `synth.pad.warm` → Pad 2 (warm).
-- An optional `patch=` slot per entry is reserved for Milestone 3 step 3, where Surge XT / Vital patches via DawDreamer give those sounds their real character.
+Decision:
+- If at least 60% of matched mix votes name a family different from the stem's prior, the stem is **reassigned**. Refinement then re-runs with that family's prior; for River, the guitar stem becomes piano 0.73.
+- The `:instruments` line records the reassignment with `meta warn="guitar stem reassigned to keys by mix-level vote 0.xx"`.
+- Confidence is the agreement: the product of the refinement probability and the mix-vote share, or the refinement probability alone when fewer than 5 notes matched. Below 0.5 it is written with `?`.
 
-**Two-level classification.**
-- The family is chosen first, e.g. `synth.lead` vs `gtr`.
-- Then the instrument within the family is chosen.
-- When the fine label's margin is too small, the `.sc` carries the family only (e.g. `inst=synth.lead`) with the fine scores in `tags{}`.
-- A confident family plus an uncertain variant is still a useful, honest answer.
+**Output in `.sc`.**
+- The `:instruments` stream, per stem: `<stem> bars A-B <inst> ?conf | <runner-up> p`, as in the earlier design.
+- One note stream per resulting instrument: `:notes.<short> inst=<vocab>`, plus `meta stem=<stem> level=<dB> src=tsumugi:<type>@020edc1 conf=<c>`.
+- Note positions use `bar:beat` with 3 decimal beats instead of the current half-beat rounding: a near-original rebuild must keep the performed timing. Durations are in beats to 3 decimals.
+- Streams with fewer than 3 notes, or under 2% of their stem's notes, are dropped as bleed (`# … omitted — bleed (N notes)`).
+- Drums: `drums_v1_5` GM pitches map to voice names. `gm.DRUM_NOTES` grows to cover the GM kit: `clap` 39, `stick` 37, `hat.pedal` 44, `hat.open` 46, `tom.floor` 41/43, `crash` 49/57, `ride` 51/59, `cowbell` 56, `tamb` 54, and the rest. The renderer maps them back.
+- Vocals: the vocal stem is transcribed (`:notes.vox`, `meta stem=lead_vocals`) so the singing work has melody notes, but renders still leave vocals out unless `--with-vocals`.
 
-**Classifier interface.** `Tagger.scores(audio: np.ndarray, sr: int) -> dict[str, float]` returns a score for every vocabulary entry. Three implementations:
-- `ClapTagger` (msclap; zero-shot over the prompts);
-- `MuLanTagger` (MuQ-MuLan; zero-shot, CC BY-NC weights);
-- `EssentiaTagger` (the MTG-Jamendo instrument model, with its labels mapped into the vocabulary).
+**Taxonomy mapping.** `src/soundcode/data/tsumugi_classes.json` maps each of tsumugi's 36 classes to our `family.instrument` name and a GM program, e.g. `electric_piano` → `keys.ep` / 4, `distorted_guitar` → `gtr.electric.distortion` / 30, `melody` → `voice.lead`. `gm.target_for` resolves the fine-grained `inst=` through this table before falling back to the family.
 
-Audio LLMs (MOSS-Music, Qwen3-Omni) are not taggers here. They score about 31% on NSynth instruments. They may later cross-check the inventory as a second opinion.
-
-The default is chosen by the bake-off (Evaluation, item 1).
-
-**Scanning.**
-- Each stem is cut into 5 s windows with a 2.5 s hop.
-- A window more than 40 dB below the stem's loudest window is skipped as silence.
-- The stem name restricts the candidates:
-
-| Stem | Candidates |
-|---|---|
-| `bass` | `bass.*`, `synth.bass.*` |
-| `drums` | `drums.* perc.*` |
-| `guitar` | `gtr.*`, plus `ethnic.*` plucked strings |
-| `piano` | `keys.*`, `mallet.*`, `organ.*`, `synth.keys.*` |
-| `lead_vocals` / `backing_vocals` | `voice.*` |
-| `other` | everything except `voice.*`, `drums.*`, `perc.*`, `bass.*`, `synth.bass.*` |
-
-**Spans.**
-- Per window, the top label wins when its margin over the runner-up is at least 0.10. Otherwise the window is `unknown`, and its top scores are kept as evidence.
-- Consecutive windows with the same label merge into a span.
-- Span edges snap to the nearest bar line in the `:grid`.
-- Span confidence is the mean top score.
-- A second label is recorded alongside the main one when its mean score in the span is at least 0.25. This is the "also heard" evidence for instruments playing at the same time.
-
-**Output in `.sc`:**
-
-1. A new `:instruments` stream, which is the inventory. It has one line per (stem, span):
-
-   ```
-   :instruments
-   meta    src=clap  conf=0.71
-   other   bars 1-16   synth.pad ?0.72   | strings 0.31
-   other   bars 17-32  strings ?0.66
-   bass    bars 1-40   bass.electric ?0.91
-   ```
-
-   Confidence ≥ 0.80 carries no `?` marker, following the existing encoder convention.
-
-2. Note streams split by instrument:
-   - Notes from a stem go to a stream named after the instrument of the span they start in, e.g. `:notes.pad inst=synth.pad`, `:notes.strings inst=strings`.
-   - Notes in an `unknown` span stay in `:notes.<stem> inst=unknown`, with a `tags{}` line holding the top scores.
-   - Name clashes (two stems both labelled `synth.pad`) get the stem appended, e.g. `:notes.pad.other`.
-   - Drums keep `:perc.drums` and gain `inst=drums.kit` or `drums.machine`.
-
-3. The parser already preserves unknown streams. `check` lists `:instruments` like any other stream.
-
-**Failure.** If no tagger can load, the inventory stage is omitted with a `# :instruments omitted — reason` line. Note streams then fall back to today's stem-named streams with `inst=` seeded from the stem name (e.g. `bass` → `bass.electric`). The fail-soft rule is from spec §5.
+**Unchanged:** the loudness gate (a silent stem skips tsumugi entirely), `:grid`, `:struct`, `:harmony`, `:text`.
 
 ## Evaluation and acceptance
 
@@ -268,7 +225,11 @@ The default is chosen by the bake-off (Evaluation, item 1).
      - every stem's level is within ±3 dB of the original;
      - a stem more than 40 dB below the mix produces no notes (the *River* bass for 0–17 s, and "other");
      - mean note F1 over the pitched stems improves on the baseline for every song.
-1. **Classifier bake-off.**
+1. **tsumugi vs the Plan 1 encoder** on the five clips (`compare`, `after2` baseline):
+   - mean note F1 over active stems improves on every song;
+   - River's inventory is keys (piano / e-piano) plus drums with claps, with no guitar stream;
+   - the listening checkpoint: "sounds like the song's instruments".
+2. **Classifier bake-off** (deferred; superseded by item 1 unless tsumugi's labels fail on the test songs).
    - Data: BabySlakh (20 tracks, labelled stems), in a gitignored `data/`.
    - Metric: family-level and fine-level accuracy of each tagger's (CLAP, MuQ-MuLan, Essentia) per-stem top label. Slakh labels are GM programs, so both levels are scored directly.
    - Target: ≥ 80% at family level. Fine-level accuracy is recorded, with no target yet. The higher-scoring tagger becomes the default.
