@@ -63,6 +63,15 @@ energy) and writes an HTML report with players and spectrograms under
 `docs/results/2026-09-26-compare-baseline.md`,
 `docs/results/2026-09-26-compare-after-fixes.md`.
 
+**Transcription backbone: tsumugi.** `encode` transcribes each stem with
+[tsumugi](https://github.com/anime-song/tsumugi) (MIT, pinned in `external/tsumugi`,
+installed by `scripts/install_tsumugi.sh`). It writes one note stream per identified
+instrument, drums with claps, and an `:instruments` inventory whose confidence
+comes from tsumugi's refinement model agreeing with a mix-level vote. Note F1
+roughly doubled on three of five test songs:
+`docs/results/2026-09-26-compare-tsumugi.md`. Singing spike (DiffSinger → Seed-VC,
+voice similarity 0.90 to the original singer): `docs/research/2026-09-26-singing-spike.md`.
+
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.
