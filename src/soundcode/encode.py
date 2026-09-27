@@ -124,7 +124,8 @@ def vocal_stem_name(path: Path) -> str:
 
 
 def _stage_lines(st: "Stage") -> list[str]:
-    out = [f":{st.name}", f"meta    src={st.src}  conf={st.conf:.2f}"]
+    fields = "".join(f" {k}={v}" for k, v in st.header_fields.items())
+    out = [f":{st.name}{fields}", f"meta    src={st.src}  conf={st.conf:.2f}"]
     if st.stem:
         level = f"  level={st.level_db:.1f}dB" if st.level_db is not None else ""
         out.append(f"meta    stem={st.stem}{level}")
@@ -156,6 +157,7 @@ class Stage:
     ok: bool = False
     stem: str = ""                # source stem, for the renderer and compare
     gated: bool = False           # silent under the loudness gate: no fallback
+    header_fields: dict[str, str] = field(default_factory=dict)   # e.g. inst=
     level_db: float | None = None  # source stem RMS over its active blocks
 
 
@@ -594,6 +596,116 @@ def stage_notes_poly(stem: Path | None, name: str, grid: dict,
     return st
 
 
+def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: int,
+                  grid: dict, work: Path) -> tuple[list[Stage], set[str]]:
+    """tsumugi per stem + a mix-level vote -> :instruments, note streams, drums.
+
+    Stems that fail (TsumugiError) are left out of `handled`; encode() runs
+    the basic-pitch path for those, so one bad stem never loses the rest.
+    """
+    import librosa
+    import soundfile as sf
+
+    from . import gm
+    from . import inventory as inv
+    from . import tsumugi as ts
+    from . import tsumugi_sc as tsc
+
+    if not grid:
+        return [], set()
+    work.mkdir(parents=True, exist_ok=True)
+    handled: set[str] = set()
+    inventory = Stage("instruments", src=f"tsumugi@{ts.PINNED_COMMIT}+mix-vote")
+    stages: list[Stage] = []
+    taken: set[str] = set()
+    confs: list[float] = []
+
+    if not mix_path.exists():
+        sf.write(str(mix_path), mix, sr)
+    try:
+        mix_tracks = tsc.read_tracks(ts.transcribe(mix_path, work / "mix.mid", "default"))
+    except ts.TsumugiError as exc:
+        STEM_NOTES.append(f"tsumugi mix-level vote unavailable ({exc})")
+        mix_tracks = []
+
+    for stem, path in stems.items():
+        y_stem, _ = librosa.load(str(path), sr=sr, mono=True)
+        mask = active_blocks(y_stem, mix, sr)
+        level = active_level_db(y_stem, mask, sr)
+        if not mask.any():
+            inventory.lines.append(f"# {stem}: silent (below the loudness gate)")
+            handled.add(stem)
+            continue
+        try:
+            midi = ts.transcribe(path, work / f"{stem}.mid", ts.STEM_MODEL[stem])
+            try:
+                midi = ts.add_velocity(midi, path, work / f"{stem}.vel.mid")
+            except ts.TsumugiError as exc:
+                STEM_NOTES.append(f"{stem}: velocity model failed ({exc}); velocities are flat")
+            tracks, why = tsc.drop_bleed(tsc.read_tracks(midi))
+        except ts.TsumugiError as exc:
+            STEM_NOTES.append(f"tsumugi failed on {stem} ({exc}); basic-pitch used")
+            continue
+        handled.add(stem)
+
+        if stem == "drums":
+            st = Stage("perc.drums", src=f"tsumugi:drums_v1_5@{ts.PINNED_COMMIT}", conf=0.69,
+                       stem="drums", level_db=level)
+            st.header_fields = {"inst": "drums.kit"}
+            st.warns += why
+            for t in tracks:
+                st.lines += tsc.note_lines(t, grid)
+            st.ok = bool(st.lines)
+            stages.append(st)
+            inventory.lines.append(f"drums    {'drums.kit' if st.ok else 'none'}")
+            continue
+
+        prior = inv.STEM_FAMILY.get(stem, "other")
+        try:
+            top = ts.refine(path, midi, ts.REFINE_STEM.get(stem, "other"),
+                            work / f"{stem}.refine.json")
+        except ts.TsumugiError as exc:
+            top = []
+            STEM_NOTES.append(f"{stem}: refinement failed ({exc})")
+        decision = inv.decide(stem, prior, top,
+                              inv.mix_votes(tracks, mix_tracks, prefer=prior))
+        if decision.reassigned:
+            again = inv.FAMILY_REFINE_STEM.get(decision.family, "other")
+            try:
+                top = ts.refine(path, midi, again, work / f"{stem}.refine.{again}.json")
+                decision.conf *= top[0][1] if top else 1.0
+            except ts.TsumugiError:
+                top = []
+        # the stem's refined class relabels its tracks when it fits the decided family
+        klass = top[0][0] if top and gm.TSUMUGI[top[0][0]]["family"] == decision.family else None
+        if klass is not None:
+            for t in tracks:
+                t.klass, t.inst = klass, gm.TSUMUGI[klass]["inst"]
+        tracks = tsc.merge_same_inst(tracks)
+        for t in tracks:
+            st = Stage(tsc.stream_name(t.inst, stem, taken),
+                       src=f"tsumugi:{ts.STEM_MODEL[stem]}@{ts.PINNED_COMMIT}",
+                       conf=decision.conf, stem=stem, level_db=level)
+            st.header_fields = {"inst": t.inst}
+            if decision.warn:
+                st.warns.append(decision.warn)
+            st.warns += why
+            st.lines = tsc.note_lines(t, grid)
+            st.ok = bool(st.lines)
+            stages.append(st)
+        label = tracks[0].inst if tracks else "none"
+        mark = "" if decision.conf >= 0.80 else f" ?{decision.conf:.2f}"
+        runner = f"   | {top[1][0]} {top[1][1]:.2f}" if len(top) > 1 else ""
+        inventory.lines.append(f"{stem:<8} {label}{mark}{runner}")
+        if decision.warn:
+            inventory.warns.append(decision.warn)
+        confs.append(decision.conf)
+
+    inventory.conf = float(np.mean(confs)) if confs else 0.0
+    inventory.ok = bool(inventory.lines)
+    return ([inventory] + stages if inventory.ok else stages), handled
+
+
 def stage_mix(y: np.ndarray, sr: int) -> Stage:
     """Measured production scalars — evidence for the bridge's prose."""
     import librosa
@@ -698,30 +810,37 @@ def encode(path: str, out_path: str | None = None,
     grid_st, grid = stage_grid(y, sr, duration)
     _log("structure"); struct_st = stage_struct(y, sr, grid, duration)
     _log("harmony");   harm_st = stage_harmony(y, sr, grid)
-    _log("percussion"); perc_st = stage_percussion(stems.get("drums"), y, sr, grid)
-    # basic-pitch is polyphonic and vastly better on real material; pyin is
-    # kept only as the fallback when it cannot be imported.
-    _log("bass notes")
     mono_mix = y.mean(0)
-    bass_st = stage_notes_poly(stems.get("bass"), "bass", grid, mix=mono_mix, sr=sr,
-                               stem_name="bass")
-    if needs_fallback(bass_st):
-        bass_st, _ = stage_notes(stems.get("bass"), "bass", sr, grid, "E1", "E4",
-                                 "bass.electric")
-    _log("vocal notes")
-    vox_st = stage_notes_poly(stems.get("vocals"), "vox", grid, mix=mono_mix, sr=sr,
-                              stem_name=vocal_stem_name(stems["vocals"]) if "vocals" in stems else "")
-    if needs_fallback(vox_st):
-        vox_st, _ = stage_notes(stems.get("vocals"), "vox", sr, grid, "C2", "C6",
-                                "voice.lead")
-    _log("other/harmony notes")
-    other_st = stage_notes_poly(stems.get("other"), "other", grid, mix=mono_mix, sr=sr,
-                                stem_name="other")
-    _log("guitar/piano notes")
-    guitar_st = stage_notes_poly(stems.get("guitar"), "guitar", grid, mix=mono_mix, sr=sr,
-                                 stem_name="guitar")
-    piano_st = stage_notes_poly(stems.get("piano"), "piano", grid, mix=mono_mix, sr=sr,
-                                stem_name="piano")
+    # tsumugi transcribes every stem it can; basic-pitch covers the rest
+    ts_stems = {(vocal_stem_name(v) if k == "vocals" else k): v for k, v in stems.items()}
+    _log("tsumugi (notes, drums, instrument inventory)")
+    ts_stages, handled = (stage_tsumugi(ts_stems, wd / "mix.wav", mono_mix, sr, grid,
+                                        wd / "tsumugi") if stems else ([], set()))
+    vox_name = vocal_stem_name(stems["vocals"]) if "vocals" in stems else ""
+    skipped = Stage("skipped")                       # ok=False, no warns: not written
+
+    _log("fallback transcription for stems tsumugi did not handle")
+    perc_st = skipped if "drums" in handled else stage_percussion(stems.get("drums"), y, sr, grid)
+    if "bass" in handled:
+        bass_st = skipped
+    else:
+        bass_st = stage_notes_poly(stems.get("bass"), "bass", grid, mix=mono_mix, sr=sr,
+                                   stem_name="bass")
+        if needs_fallback(bass_st):
+            bass_st, _ = stage_notes(stems.get("bass"), "bass", sr, grid, "E1", "E4",
+                                     "bass.electric")
+    if vox_name in handled:
+        vox_st = skipped
+    else:
+        vox_st = stage_notes_poly(stems.get("vocals"), "vox", grid, mix=mono_mix, sr=sr,
+                                  stem_name=vox_name)
+        if needs_fallback(vox_st):
+            vox_st, _ = stage_notes(stems.get("vocals"), "vox", sr, grid, "C2", "C6",
+                                    "voice.lead")
+    other_st, guitar_st, piano_st = (
+        skipped if n in handled else
+        stage_notes_poly(stems.get(n), n, grid, mix=mono_mix, sr=sr, stem_name=n)
+        for n in ("other", "guitar", "piano"))
     _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid)
     _log("mix");       mix_st = stage_mix(y, sr)
 
@@ -763,7 +882,7 @@ def encode(path: str, out_path: str | None = None,
     if key:
         lines += [":tuning", "ref          A4 = 440.0Hz", "temperament  12tet", ""]
 
-    for st in (grid_st, struct_st, harm_st, perc_st, bass_st, vox_st,
+    for st in (grid_st, struct_st, harm_st, *ts_stages, perc_st, bass_st, vox_st,
                guitar_st, piano_st, other_st, text_st, mix_st):
         if not st.ok:
             if st.warns:

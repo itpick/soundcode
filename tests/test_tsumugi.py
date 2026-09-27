@@ -184,3 +184,117 @@ def test_too_few_votes_leaves_refinement_in_charge():
     d = inv.decide("bass", "bass", [("electric_bass", 0.88)], {"keys": 3})
     assert d.family == "bass" and not d.reassigned and d.conf == 0.88
     assert "few mix votes" in d.warn
+
+
+# --- encoder stage (tsumugi faked) ---------------------------------------------------------
+
+import numpy as np  # noqa: E402
+import soundfile as sf  # noqa: E402
+
+from soundcode import encode as enc  # noqa: E402
+
+
+def _stem(tmp_path, name, db=-20.0, secs=8):
+    sr = 22050
+    y = (np.random.default_rng(1).standard_normal(sr * secs) * 10 ** (db / 20)).astype(np.float32)
+    p = tmp_path / f"{name}.wav"
+    sf.write(str(p), y, sr)
+    return p, y, sr
+
+
+def _fake_tsumugi(monkeypatch, tmp_path, per_model, mix_tracks, refine_top):
+    def _write(out_midi, tracks):
+        out_midi.parent.mkdir(parents=True, exist_ok=True)
+        _midi(tmp_path, tracks).replace(out_midi)
+        return out_midi
+
+    def transcribe(audio, out_midi, model):
+        tracks = mix_tracks if Path(audio).name == "mix.wav" else per_model[model]
+        return _write(out_midi, tracks)
+    monkeypatch.setattr(ts, "transcribe", transcribe)
+    monkeypatch.setattr(ts, "refine", lambda audio, midi, stem, js: refine_top[stem])
+    monkeypatch.setattr(ts, "add_velocity", lambda midi, wav, out: midi)
+
+
+def test_stage_tsumugi_reassigns_the_river_guitar_and_keeps_claps(tmp_path, monkeypatch):
+    piano, y, sr = _stem(tmp_path, "piano")
+    guitar, _, _ = _stem(tmp_path, "guitar", -25)
+    drums, _, _ = _stem(tmp_path, "drums", -22)
+    mix = np.concatenate([y])
+    onsets = [1.0 + 0.5 * i for i in range(12)]
+    per_model = {
+        "default": [(0, False, [(o, o + 0.4, 60, 90) for o in onsets])],
+        "guitar_v1_5": [(30, False, [(o, o + 0.4, 64, 80) for o in onsets])],
+        "drums_v1_5": [(0, True, [(o, o + 0.1, 39, 100) for o in onsets])],
+    }
+    mix_tracks = [(4, False, [(o + 0.01, o + 0.4, 64, 80) for o in onsets] +
+                            [(o + 0.01, o + 0.4, 60, 90) for o in onsets])]
+    refine_top = {"piano": [("piano", 0.97)], "guitar": [("distorted_guitar", 0.97)]}
+    _fake_tsumugi(monkeypatch, tmp_path, per_model, mix_tracks, refine_top)
+    grid = {"downbeat": 1.0, "bar_dur": 2.0}
+    stages, handled = enc.stage_tsumugi({"piano": piano, "guitar": guitar, "drums": drums},
+                                        tmp_path / "mix.wav", mix, sr, grid, tmp_path / "work")
+    text = "\n".join(line for st in stages if st.ok for line in enc._stage_lines(st))
+    assert handled == {"piano", "guitar", "drums"}
+    assert ":instruments" in text and "reassigned to keys" in text
+    headers = [ln for ln in text.splitlines() if ln.startswith(":notes.")]
+    assert any("inst=keys." in h for h in headers)
+    assert not any("inst=gtr." in h for h in headers)
+    assert " clap " in text
+
+
+def test_stage_tsumugi_falls_back_per_stem_on_error(tmp_path, monkeypatch):
+    piano, y, sr = _stem(tmp_path, "piano")
+    bass, _, _ = _stem(tmp_path, "bass")
+    def transcribe(audio, out_midi, model):
+        if model == "bass_v2":
+            raise ts.TsumugiError("amt.cli.infer: boom")
+        out_midi.parent.mkdir(parents=True, exist_ok=True)
+        _midi(tmp_path, [(0, False, [(1.0 + i * 0.5, 1.4 + i * 0.5, 60, 90) for i in range(8)])]).replace(out_midi)
+        return out_midi
+    monkeypatch.setattr(ts, "transcribe", transcribe)
+    monkeypatch.setattr(ts, "refine", lambda *a: [("piano", 0.9)])
+    monkeypatch.setattr(ts, "add_velocity", lambda midi, wav, out: midi)
+    stages, handled = enc.stage_tsumugi({"piano": piano, "bass": bass}, tmp_path / "mix.wav",
+                                        y, sr, {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
+    assert handled == {"piano"}
+    assert any("bass" in n and "boom" in n for n in enc.STEM_NOTES)
+
+
+def test_silent_stem_is_gated_before_tsumugi(tmp_path, monkeypatch):
+    piano, y, sr = _stem(tmp_path, "piano")
+    other, _, _ = _stem(tmp_path, "other", -90)
+    calls = []
+    monkeypatch.setattr(ts, "transcribe", lambda a, o, m: calls.append(m) or (_ for _ in ()).throw(ts.TsumugiError("x")))
+    enc.stage_tsumugi({"other": other}, tmp_path / "mix.wav", y, sr,
+                      {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
+    assert "other_v1_5" not in calls
+
+
+# --- real-run findings (Task 5) -------------------------------------------------------------
+
+def test_vote_prefers_the_stem_family_when_a_matching_note_of_it_exists():
+    stem = [_t("melody", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]
+    mix = [_t("piano", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]), _t("melody", [1.01, 2.0, 3.0, 4.0, 5.0, 6.0])]
+    assert inv.mix_votes(stem, mix, prefer="voice") == {"voice": 6}
+
+
+def test_vocal_and_drum_stems_are_never_reassigned():
+    for stem, fam in (("lead_vocals", "voice"), ("vocals", "voice"), ("drums", "drums")):
+        d = inv.decide(stem, fam, [("melody", 0.9)], {"keys": 20})
+        assert d.family == fam and not d.reassigned
+
+
+def test_tracks_with_the_same_instrument_merge():
+    a = tsc.Track("piano", "keys.piano", [(1.0, 1.5, 60, 90)])
+    b = tsc.Track("piano", "keys.piano", [(0.5, 0.9, 64, 80)])
+    c = tsc.Track("electric_piano", "keys.ep", [(2.0, 2.5, 67, 70)])
+    merged = tsc.merge_same_inst([a, b, c])
+    assert [(t.inst, len(t.notes)) for t in merged] == [("keys.piano", 2), ("keys.ep", 1)]
+    assert merged[0].notes[0][0] == 0.5                      # sorted by onset
+
+
+def test_stream_names_stay_unique_on_repeated_clashes():
+    taken: set[str] = set()
+    names = [tsc.stream_name("keys.piano", "piano", taken) for _ in range(3)]
+    assert len(set(names)) == 3

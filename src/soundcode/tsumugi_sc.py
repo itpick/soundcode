@@ -73,10 +73,26 @@ def drop_bleed(tracks: list[Track], min_notes: int = 3,
     return kept, why
 
 
+def merge_same_inst(tracks: list[Track]) -> list[Track]:
+    """One track per instrument: tsumugi may split a stem into several tracks
+    that refinement then relabels to the same class."""
+    out: dict[str, Track] = {}
+    for t in tracks:
+        if t.inst in out:
+            out[t.inst].notes = sorted(out[t.inst].notes + t.notes)
+        else:
+            out[t.inst] = Track(t.klass, t.inst, sorted(t.notes))
+    return list(out.values())
+
+
 def stream_name(inst: str, stem: str, taken: set[str]) -> str:
     short = inst.split(".")[1] if "." in inst else inst
     name = f"notes.{short}"
     if name in taken:
         name = f"notes.{short}.{stem}"
+    n = 2
+    base = name
+    while name in taken:
+        name, n = f"{base}{n}", n + 1
     taken.add(name)
     return name
