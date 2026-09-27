@@ -30,6 +30,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/soundcode"]
+artifacts = ["src/soundcode/data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

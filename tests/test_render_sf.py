@@ -247,3 +247,30 @@ def test_server_mock_buttons_pin_the_mock_engine():
     for line in src.splitlines():
         if '"render"' in line and ".mock" not in line and ("-o" in line):
             assert '"--engine", "mock"' in line, line
+
+
+# --- tsumugi classes + full drum kit -------------------------------------------------
+
+def test_every_tsumugi_class_has_an_inst_program_and_family():
+    assert len(gm.TSUMUGI) == 36
+    for name, e in gm.TSUMUGI.items():
+        assert set(e) >= {"inst", "program", "family", "programs"}, name
+        assert 0 <= e["program"] <= 127
+
+
+def test_fine_grained_inst_picks_its_own_program():
+    assert gm.target_for("notes.x", "keys.ep").preset == 4
+    assert gm.target_for("notes.x", "gtr.electric.distortion").preset == 30
+    assert gm.target_for("notes.x", "bass.electric").preset == 33      # family table still works
+
+
+def test_programs_map_back_to_tsumugi_classes():
+    assert gm.tsumugi_class_for_program(5) == "electric_piano"
+    assert gm.tsumugi_class_for_program(30) == "distorted_guitar"
+
+
+def test_drum_voices_round_trip_including_clap():
+    for pitch in (35, 36, 37, 38, 39, 42, 44, 46, 49, 51, 56):
+        assert gm.drum_note(gm.drum_voice(pitch)) == (36 if pitch == 35 else pitch)
+    assert gm.drum_voice(39) == "clap"
+    assert gm.drum_voice(81) == "gm81" and gm.drum_note("gm81") == 81
