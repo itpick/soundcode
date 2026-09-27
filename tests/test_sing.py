@@ -144,3 +144,34 @@ def test_melisma_and_extra_words():
     sc = ss.build(doc)
     assert sum(sc.frames) == sc.n_frames
     assert not any("crash" in w for w in sc.warnings)
+
+
+# --- DiffSinger engine -------------------------------------------------------------------
+
+from soundcode import diffsinger as ds  # noqa: E402
+
+
+def test_missing_bank_is_one_clear_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOUNDCODE_DIFFSINGER", str(tmp_path / "nope"))
+    with pytest.raises(ss.SingError, match="nope"):
+        ds.bank_dir()
+
+
+def _bank_present():
+    try:
+        ds.bank_dir(), ds.vocoder_path()
+        return True
+    except ss.SingError:
+        return False
+
+
+@pytest.mark.skipif(not _bank_present(), reason="DiffSinger bank not installed")
+def test_diffsinger_sings_two_bars_at_the_requested_pitch():
+    import librosa
+    sc = ss.build(parse(SONG))
+    y = ds.render(sc)
+    assert abs(len(y) / ss.SR - 4.0) < 0.1 and np.abs(y).max() > 0.1
+    f0, v, _ = librosa.pyin(y, fmin=100, fmax=600, sr=ss.SR, frame_length=2048)
+    t = librosa.times_like(f0, sr=ss.SR)
+    seg = f0[(t > 1.3) & (t < 1.8) & v]                    # the E4 note
+    assert len(seg) and abs(np.median(1200 * np.log2(seg / 329.63))) < 50
