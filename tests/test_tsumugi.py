@@ -298,3 +298,17 @@ def test_stream_names_stay_unique_on_repeated_clashes():
     taken: set[str] = set()
     names = [tsc.stream_name("keys.piano", "piano", taken) for _ in range(3)]
     assert len(set(names)) == 3
+
+
+def test_a_stem_split_into_many_small_tracks_is_not_dropped_as_bleed(tmp_path, monkeypatch):
+    """tsumugi can split one bass line over many tracks; bleed is judged
+    after merging same-instrument tracks, not per fragment."""
+    bass, y, sr = _stem(tmp_path, "bass", -20)
+    frags = [(33, False, [(1.0 + i + 0.1 * k, 1.05 + i + 0.1 * k, 40, 90) for k in range(2)])
+             for i in range(30)]                                   # 30 tracks x 2 notes
+    _fake_tsumugi(monkeypatch, tmp_path, {"bass_v2": frags}, [],
+                  {"bass": [("electric_bass", 0.9)]})
+    stages, handled = enc.stage_tsumugi({"bass": bass}, tmp_path / "mix.wav", y, sr,
+                                        {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
+    notes = [st for st in stages if st.name.startswith("notes.") and st.ok]
+    assert len(notes) == 1 and len(notes[0].lines) == 60
