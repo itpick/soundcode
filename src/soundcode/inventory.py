@@ -62,10 +62,13 @@ def decide(stem: str, prior_family: str, refine_top: list[tuple[str, float]],
         return Decision(prior_family, False, p_refine, votes,
                         f"few mix votes ({total}); refinement only")
     top_family, top_n = max(votes.items(), key=lambda kv: kv[1])
-    if prior_family in NEVER_REASSIGN:
-        agree = votes.get(prior_family, 0) / total
-        return Decision(prior_family, False, max(p_refine * agree, p_refine * 0.5), votes, None)
     share = top_n / total
+    if prior_family in NEVER_REASSIGN:
+        # the vote is not trusted for these stems: confidence stays with the
+        # refinement, and a disagreement is recorded rather than scored
+        warn = (None if top_family == prior_family else
+                f"mix vote disagrees ({top_family} {share:.2f}); kept as {prior_family}")
+        return Decision(prior_family, False, p_refine, votes, warn)
     if top_family != prior_family and share >= REASSIGN_SHARE:
         return Decision(top_family, True, share, votes,
                         f"{stem} stem reassigned to {top_family} by mix-level vote {share:.2f}")

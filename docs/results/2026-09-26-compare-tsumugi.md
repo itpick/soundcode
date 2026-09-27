@@ -41,7 +41,7 @@ Mean note F1 over stems present in the original (orig stem > −60 dBFS):
   ```
 
   `:perc.drums` has 19 `clap` hits.
-- **Listening checkpoint:** river played for the user, instruments only, then the full rebuild with the DiffSinger → Seed-VC vocal (`out/preview/river-30s.full-rebuild.wav`). Corona played before and after the drone fix. Verdict: pending the user's notes.
+- **Listening checkpoint:** river played for the user, instruments only, then the full rebuild with the DiffSinger → Seed-VC vocal (`out/preview/river-30s.full-rebuild.wav`). Corona played before and after the drone fix. The user's verdict is deferred: none recorded yet (their earlier feedback on the pre-tsumugi preview was "some of that piano is working", then "it is improvement").
 
 ## Bugs found by real runs and fixed
 
@@ -50,6 +50,15 @@ Mean note F1 over stems present in the original (orig stem > −60 dBFS):
 3. Duplicate stream names. Same-instrument tracks now merge.
 4. A bass line split over many tracks was dropped as bleed. Bleed is now judged after merging.
 5. A single-note drone was dropped as bleed. Bleed is now judged by sounding time too.
+
+## Fixes from the final review (after these numbers)
+
+- Bleed is judged once, after refinement relabels a stem's tracks. River piano had lost 4 of 88 notes to "bleed" of instruments that aren't there.
+- A stem whose notes are all bleed writes `# :notes.<stem> omitted — …` and `none (bleed)` in the inventory.
+- Pickup notes (before the first downbeat) carry seconds durations. `Nb` on an `@` event expanded at a fixed 0.5 s/beat (up to 403 ms off).
+- Vocal and drum stems keep the refinement confidence. A disagreeing mix vote is recorded as a warn, not halved into the number.
+- `perc.timpani` renders as the pitched timpani program, not drum-kit hits.
+- Bleed needs to be tiny by *both* note share and sounding share, so a staccato line next to a long pad is kept.
 
 ## Follow-ups
 

@@ -134,7 +134,7 @@ def test_note_lines_pitched_and_drums():
 
 def test_bleed_tracks_are_dropped_with_a_reason():
     big = tsc.Track("piano", "keys.piano", [(i, i + 0.5, 60, 90) for i in range(200)])
-    tiny = tsc.Track("strings", "strings.ensemble", [(0, 1, 60, 90), (1, 2, 62, 90)])
+    tiny = tsc.Track("strings", "strings.ensemble", [(0, 0.9, 60, 90), (1, 2, 62, 90)])
     rare = tsc.Track("organ", "organ.drawbar", [(i, i + 0.5, 60, 90) for i in range(3)])
     kept, why = tsc.drop_bleed([big, tiny, rare])
     assert [t.klass for t in kept] == ["piano"]
@@ -321,3 +321,51 @@ def test_a_long_drone_is_not_bleed():
     kept, why = tsc.drop_bleed([drone, blip])
     assert [t.klass for t in kept] == ["electric_bass"]
     assert any("strings" in w for w in why)
+
+
+# --- final-review fixes ----------------------------------------------------------------------
+
+def test_bleed_is_judged_after_relabel_so_own_notes_survive(tmp_path, monkeypatch):
+    piano, y, sr = _stem(tmp_path, "piano")
+    tracks = [(0, False, [(1.0 + 0.4 * i, 1.3 + 0.4 * i, 60, 90) for i in range(50)]),
+              (33, False, [(3.0, 3.2, 40, 60), (5.0, 5.2, 41, 60)]),
+              (26, False, [(7.0, 7.1, 64, 50)])]
+    _fake_tsumugi(monkeypatch, tmp_path, {"default": tracks}, [], {"piano": [("piano", 0.97)]})
+    stages, _ = enc.stage_tsumugi({"piano": piano}, tmp_path / "mix.wav", y, sr,
+                                  {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
+    notes = [st for st in stages if st.name.startswith("notes.") and st.ok]
+    assert len(notes) == 1 and len(notes[0].lines) == 53
+    assert not any("bleed" in w for w in notes[0].warns)
+
+
+def test_a_stem_that_is_all_bleed_says_so(tmp_path, monkeypatch):
+    piano, y, sr = _stem(tmp_path, "piano")
+    _fake_tsumugi(monkeypatch, tmp_path, {"default": [(65, False, [(1.0, 1.2, 60, 40)])]}, [],
+                  {"piano": [("piano", 0.9)]})
+    stages, _ = enc.stage_tsumugi({"piano": piano}, tmp_path / "mix.wav", y, sr,
+                                  {"downbeat": 1.0, "bar_dur": 2.0}, tmp_path / "w")
+    omitted = [st for st in stages if st.name == "notes.piano" and not st.ok]
+    assert omitted and any("bleed" in w for w in omitted[0].warns)
+    assert any("none (bleed)" in ln for ln in stages[0].lines)
+
+
+def test_pickup_notes_carry_seconds_durations():
+    t = tsc.Track("piano", "keys.piano", [(0.4, 0.775, 60, 88)])
+    assert tsc.note_lines(t, GRID) == ["@0.400  C4  0.375s 88"]
+
+
+def test_never_reassigned_stems_keep_refinement_confidence_and_note_the_disagreement():
+    d = inv.decide("lead_vocals", "voice", [("melody", 0.98)], {"keys": 20})
+    assert d.conf == 0.98 and "disagrees" in d.warn
+
+
+def test_timpani_is_pitched_not_a_drum_kit():
+    t = gm.target_for("notes.timpani", "perc.timpani")
+    assert not t.drums and t.preset == 47
+
+
+def test_sparse_staccato_line_next_to_a_long_pad_is_kept():
+    pad = tsc.Track("synth_pad", "synth.pad", [(0.0, 20.0, p, 60) for p in (60, 64, 67)])
+    pluck = tsc.Track("plucked_keyboard", "keys.clav", [(i, i + 0.1, 72, 90) for i in range(10)])
+    kept, _ = tsc.drop_bleed([pad, pluck])
+    assert {t.klass for t in kept} == {"synth_pad", "plucked_keyboard"}

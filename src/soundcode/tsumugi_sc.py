@@ -55,8 +55,11 @@ def note_lines(track: Track, grid: dict) -> list[str]:
         if track.klass == "drums":
             lines.append(f"{pos} {gm.drum_voice(pitch)} {vel}")
         else:
-            dur = max(end - start, 0.01) / beat_s
-            lines.append(f"{pos}  {cents_to_name(pitch * 100)}  {dur:.3f}b {vel}")
+            if pos.startswith("@"):        # absolute events: durations in seconds
+                dur = f"{max(end - start, 0.01):.3f}s"
+            else:
+                dur = f"{max(end - start, 0.01) / beat_s:.3f}b"
+            lines.append(f"{pos}  {cents_to_name(pitch * 100)}  {dur} {vel}")
     return lines
 
 
@@ -68,11 +71,14 @@ def drop_bleed(tracks: list[Track], min_notes: int = 3, min_share: float = 0.02,
         return sum(max(e - s, 0.0) for s, e, _, _ in t.notes)
 
     total = sum(sounding(t) for t in tracks) or 1.0
+    total_n = sum(len(t.notes) for t in tracks) or 1
     kept, why = [], []
     for t in tracks:
         n, dur = len(t.notes), sounding(t)
         few = n < min_notes and dur < min_sound_s
-        if few or dur / total < min_share:
+        # tiny only if tiny by both measures: staccato next to a pad, or a
+        # drone among many short notes, are both music
+        if few or (n / total_n < min_share and dur / total < min_share):
             why.append(f"{t.klass}: bleed ({n} notes, {dur:.1f}s, {dur / total:.0%} of stem)")
         else:
             kept.append(t)

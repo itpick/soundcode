@@ -64,11 +64,11 @@ class Target:
 
 
 def target_for(stream_name: str, inst: str) -> Target:
-    if stream_name.startswith("perc.") or inst.startswith(("drums", "perc")):
-        return Target(128, 0, True, "drums")
     if inst in _INST_PROGRAM:
         fam = inst.split(".")[0]
         return Target(0, _INST_PROGRAM[inst], False, fam if fam in FAMILY_PROGRAM else "unknown")
+    if stream_name.startswith("perc.") or inst.startswith(("drums", "perc")):
+        return Target(128, 0, True, "drums")
     family = inst.split(".")[0] if inst and inst != "unknown" else \
         STREAM_FAMILY.get(stream_name.split(".")[-1], "unknown")
     if family not in FAMILY_PROGRAM:

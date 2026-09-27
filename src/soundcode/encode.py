@@ -642,14 +642,14 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
                 midi = ts.add_velocity(midi, path, work / f"{stem}.vel.mid")
             except ts.TsumugiError as exc:
                 STEM_NOTES.append(f"{stem}: velocity model failed ({exc}); velocities are flat")
-            tracks = tsc.merge_same_inst(tsc.read_tracks(midi))
+            tracks = tsc.read_tracks(midi)
         except ts.TsumugiError as exc:
             STEM_NOTES.append(f"tsumugi failed on {stem} ({exc}); basic-pitch used")
             continue
         handled.add(stem)
-        tracks, why = tsc.drop_bleed(tracks)
 
         if stem == "drums":
+            tracks, why = tsc.drop_bleed(tsc.merge_same_inst(tracks))
             st = Stage("perc.drums", src=f"tsumugi:drums_v1_5@{ts.PINNED_COMMIT}", conf=0.69,
                        stem="drums", level_db=level)
             st.header_fields = {"inst": "drums.kit"}
@@ -662,6 +662,9 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
             continue
 
         prior = inv.STEM_FAMILY.get(stem, "other")
+        if not tracks:
+            inventory.lines.append(f"{stem:<8} none (no notes)")
+            continue
         try:
             top = ts.refine(path, midi, ts.REFINE_STEM.get(stem, "other"),
                             work / f"{stem}.refine.json")
@@ -682,8 +685,13 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
         if klass is not None:
             for t in tracks:
                 t.klass, t.inst = klass, gm.TSUMUGI[klass]["inst"]
-        tracks, more = tsc.drop_bleed(tsc.merge_same_inst(tracks))
-        why += more
+        # bleed is judged once, after relabelling: a stem's own instrument
+        # split over several program tracks is one part, not bleed of others
+        tracks, why = tsc.drop_bleed(tsc.merge_same_inst(tracks))
+        if not tracks:
+            stages.append(Stage(f"notes.{stem}", warns=why))       # "omitted — …"
+            inventory.lines.append(f"{stem:<8} none (bleed)")
+            continue
         for t in tracks:
             st = Stage(tsc.stream_name(t.inst, stem, taken),
                        src=f"tsumugi:{ts.STEM_MODEL[stem]}@{ts.PINNED_COMMIT}",
