@@ -750,6 +750,35 @@ def stage_mix(y: np.ndarray, sr: int) -> Stage:
     return st
 
 
+def stage_contour(stem: Path | None, stem_name: str, mix: np.ndarray, sr: int) -> Stage:
+    """The lead vocal's f0 curve (:contour.vox), gated like every stem."""
+    import librosa
+
+    from . import contour as ct
+
+    st = Stage("contour.vox", src="torchcrepe:full", stem=stem_name)
+    st.header_fields = {"rate": str(ct.RATE_HZ)}
+    if stem is None:
+        st.warns.append("no vocal stem")
+        return st
+    y, _ = librosa.load(str(stem), sr=sr, mono=True)
+    mask = active_blocks(y, mix, sr)
+    if not mask.any():
+        st.warns.append("vocal stem silent (below the loudness gate)")
+        return st
+    try:
+        times, cents, voiced, conf = ct.extract(stem)
+    except Exception as exc:                             # noqa: BLE001
+        st.warns.append(f"f0 extraction failed: {exc}")
+        return st
+    # blank frames in gated blocks, so bleed never becomes a contour
+    blk = np.minimum((times / GATE_BLOCK_S).astype(int), len(mask) - 1)
+    voiced = voiced & mask[blk]
+    st.lines = ct.contour_lines(ct.phrases(times, cents, voiced))
+    st.conf, st.ok = conf, bool(st.lines)
+    return st
+
+
 def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
     """Word-level lyrics from the vocal stem, if a Whisper backend is present."""
     st = Stage("text.vox", src="whisper")
@@ -827,6 +856,8 @@ def encode(path: str, out_path: str | None = None,
     ts_stages, handled = (stage_tsumugi(ts_stems, wd / "mix.wav", mono_mix, sr, grid,
                                         wd / "tsumugi") if stems else ([], set()))
     vox_name = vocal_stem_name(stems["vocals"]) if "vocals" in stems else ""
+    _log("vocal f0 contour")
+    contour_st = stage_contour(stems.get("vocals"), vox_name or "lead_vocals", mono_mix, sr)
     skipped = Stage("skipped")                       # ok=False, no warns: not written
 
     _log("fallback transcription for stems tsumugi did not handle")
@@ -892,7 +923,7 @@ def encode(path: str, out_path: str | None = None,
     if key:
         lines += [":tuning", "ref          A4 = 440.0Hz", "temperament  12tet", ""]
 
-    for st in (grid_st, struct_st, harm_st, *ts_stages, perc_st, bass_st, vox_st,
+    for st in (grid_st, struct_st, harm_st, *ts_stages, contour_st, perc_st, bass_st, vox_st,
                guitar_st, piano_st, other_st, text_st, mix_st):
         if not st.ok:
             if st.warns:
