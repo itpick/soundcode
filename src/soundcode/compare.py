@@ -98,6 +98,43 @@ def energy_corr(y_ref, y_est) -> float | None:
     return float(np.corrcoef(a, b)[0, 1])
 
 
+def pitch_error_cents(y_ref, y_est, sr) -> float | None:
+    import torch
+    import torchcrepe
+
+    if _silent(y_ref) or _silent(y_est):
+        return None
+
+    def f0(y):
+        hz, per = torchcrepe.predict(torch.tensor(y, dtype=torch.float32)[None], sr,
+                                     hop_length=sr // 100, fmin=50.0, fmax=1100.0, model="full",
+                                     return_periodicity=True, batch_size=512, device="cpu",
+                                     decoder=torchcrepe.decode.weighted_argmax)
+        return hz[0].numpy(), torchcrepe.filter.median(per, 3)[0].numpy()
+
+    n = min(len(y_ref), len(y_est))
+    (hr, pr), (he, pe) = f0(y_ref[:n]), f0(y_est[:n])
+    m = min(len(hr), len(he))
+    both = (pr[:m] >= 0.5) & (pe[:m] >= 0.5)
+    if both.sum() < 10:
+        return None
+    return float(np.median(np.abs(1200 * np.log2(he[:m][both] / hr[:m][both]))))
+
+
+def voice_similarity(y_ref, y_est, sr) -> float | None:
+    if _silent(y_ref) or _silent(y_est):
+        return None
+    try:
+        import librosa
+        from resemblyzer import VoiceEncoder, preprocess_wav
+    except ImportError:
+        return None
+    enc = VoiceEncoder("cpu", verbose=False)
+    to16 = lambda y: preprocess_wav(librosa.resample(np.asarray(y, np.float32), orig_sr=sr, target_sr=16000))  # noqa: E731
+    a, b = enc.embed_utterance(to16(y_ref)), enc.embed_utterance(to16(y_est))
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+
 def blocks_from_grid(doc, duration: float) -> list[tuple[float, float]]:
     from .expand import build_grid
 
@@ -158,7 +195,8 @@ def _write_wav(path: Path, y_mono: np.ndarray) -> None:
 
 
 def run(original, sc_or_wav, out_dir, engine: str = "sf2",
-        render_streams=None, stems_dir=None) -> dict:
+        render_streams=None, stems_dir=None, with_vocals: bool = False,
+        voice_ref=None) -> dict:
     from .parser import parse_file
     from .separate import STEMS, default_out_dir, read_stereo, separate
 
@@ -195,6 +233,16 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
                 stem = "lead_vocals"
             m = _mono(y, doc.sample_rate)[:n]
             rend[stem][:len(m)] += m
+        if with_vocals:
+            # the lead vocal as sung (DiffSinger -> Seed-VC), not the SoundFont line
+            import librosa
+
+            from . import sing
+            wav, _ = sing.sing(doc, voice_ref)
+            y, _ = librosa.load(str(wav), sr=SR, mono=True)
+            rend["lead_vocals"] = np.zeros(n, np.float32)
+            rend["lead_vocals"][:min(n, len(y))] = y[:n]
+            notes_side["sung"] = "lead_vocals row compares the sung vocal (DiffSinger -> Seed-VC)"
     else:
         rs = default_out_dir(sc_or_wav)
         separate(sc_or_wav, rs)
@@ -226,6 +274,9 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             row["notes_f1"] = note_f1(io, ho, ir, hr)
             row["notes_f1_octave"] = note_f1(io, ho, ir, hr, octave_agnostic=True)
         row["sound"] = None                      # CLAP: enabled in Plan 2
+        if with_vocals and s == "lead_vocals":
+            row["pitch_cents"] = pitch_error_cents(yo, yr, SR)
+            row["voice_sim"] = voice_similarity(yo, yr, SR)
         report["stems"][s] = row
 
     _plots(out, orig, rend, report)

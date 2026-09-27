@@ -76,6 +76,7 @@ def extract(stem: Path, sr: int = 16000) -> tuple[np.ndarray, np.ndarray, np.nda
     audio = torch.tensor(y)[None]
     hz, per = torchcrepe.predict(audio, sr, hop_length=sr // 100, fmin=50.0, fmax=1100.0,
                                  model="full", return_periodicity=True, batch_size=512,
+                                 decoder=torchcrepe.decode.weighted_argmax,
                                  device="cpu")
     per = torchcrepe.filter.median(per, 3)
     hz = torchcrepe.filter.median(hz, 3)

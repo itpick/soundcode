@@ -262,3 +262,16 @@ def test_remote_failure_is_a_sing_error(tmp_path, monkeypatch):
                         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 255, "", "ssh: connect to host gpubox: timed out"))
     with pytest.raises(ss.SingError, match="gpubox"):
         seedvc.convert(tmp_path / "s.wav", tmp_path / "r.wav", tmp_path / "v.wav")
+
+
+def test_f0_extraction_is_deterministic(tmp_path):
+    """torchcrepe's default Viterbi decoder is random (~9 c between identical
+    calls, even seeded); the contour must be repeatable."""
+    import soundfile as sf
+    sr = 16000
+    t = np.arange(sr * 2) / sr
+    y = (0.3 * np.sin(2 * np.pi * np.cumsum(220 * (1 + 0.01 * np.sin(2 * np.pi * 5 * t))) / sr)).astype(np.float32)
+    p = tmp_path / "v.wav"
+    sf.write(str(p), y, sr)
+    a, b = ct.extract(p), ct.extract(p)
+    np.testing.assert_array_equal(a[1], b[1])

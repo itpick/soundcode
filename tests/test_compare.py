@@ -158,3 +158,25 @@ def test_server_serves_compare_reports(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUNDCODE_ROOT", str(tmp_path))
     assert server._compare_file("song/report.html") == d / "report.html"
     assert server._compare_file("../../etc/passwd") is None
+
+
+# --- vocal metrics --------------------------------------------------------------------------
+
+def _sweep(freq, cents_off=0.0, secs=2.0, sr=16000):
+    t = np.arange(int(secs * sr)) / sr
+    f = freq * 2 ** (cents_off / 1200) * (1 + 0.01 * np.sin(2 * np.pi * 5 * t))
+    return (0.3 * np.sin(2 * np.pi * np.cumsum(f) / sr)).astype(np.float32)
+
+
+def test_pitch_error_is_zero_for_the_same_line_and_measures_detune():
+    a = _sweep(220.0)
+    assert cmp.pitch_error_cents(a, a, 16000) < 5
+    assert 40 < cmp.pitch_error_cents(a, _sweep(220.0, 50.0), 16000) < 60
+
+
+def test_pitch_error_of_silence_is_none():
+    assert cmp.pitch_error_cents(_sweep(220.0), np.zeros(32000, np.float32), 16000) is None
+
+
+def test_voice_similarity_is_none_on_silence():
+    assert cmp.voice_similarity(_sweep(220.0), np.zeros(32000, np.float32), 16000) is None
