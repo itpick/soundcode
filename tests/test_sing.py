@@ -79,3 +79,68 @@ def test_colliding_words_are_nudged_20ms():
     words = [(1.5, 1.8, "a", 0.9), (1.5, 1.9, "b", 0.9)]
     cells = enc.lyric_cells(words, GRID)
     assert cells[1].startswith("1:2.040")                         # +20 ms at 0.5 s per beat
+
+
+# --- vocal score --------------------------------------------------------------------------
+
+from soundcode import sing_score as ss  # noqa: E402
+
+SONG = """%sc 0.3
+@duration 4.0
+
+:grid
+meter @0.000 4/4
+anchor bar 1 @0.000
+tempo @0.000 120
+
+:notes.lead inst=voice.lead
+meta stem=lead_vocals
+1:1.000  C4  1.000b 90
+1:2.000  D4  1.000b 90
+1:3.000  E4  2.000b 90
+
+:text.vox
+1:1.000 "hello" 1.000b | 1:3.000 "river" 2.000b
+"""
+
+
+def test_vocal_stream_and_notes():
+    doc = parse(SONG)
+    assert ss.vocal_stream(doc) == "notes.lead"
+    assert ss.vocal_notes(doc, "notes.lead") == [(0.0, 0.5, 60), (0.5, 1.0, 62), (1.0, 2.0, 64)]
+
+
+def test_words_and_g2p():
+    doc = parse(SONG)
+    assert [(round(a, 2), round(b, 2), w) for a, b, w in ss.words(doc)] == [(0.0, 0.5, "hello"), (1.0, 2.0, "river")]
+    ph, hit = ss.g2p("river")
+    assert hit and ph[0] == "en/r" and "en/er" in ph
+
+
+def test_unknown_word_falls_back_and_warns():
+    ph, hit = ss.g2p("zzxqv")
+    assert not hit and ph                                   # letter-based guess, never empty
+
+
+def test_score_frames_cover_the_song_and_f0_follows_notes():
+    sc = ss.build(parse(SONG))
+    assert sum(sc.frames) == sc.n_frames == int(round(4.0 * ss.SR / ss.HOP))
+    t = (np.arange(sc.n_frames) + 0.5) * ss.HOP / ss.SR
+    mid_c4 = sc.f0_hz[(t > 0.1) & (t < 0.4)]
+    assert np.all(np.abs(1200 * np.log2(mid_c4 / 261.63)) < 5)
+    assert "SP" in sc.phonemes and sc.phonemes.count("en/ow") == 1
+
+
+def test_contour_overrides_notes_where_present():
+    doc = parse(SONG + "\n:contour.vox rate=50\nf0  @0.100  " + " ".join(["6030"] * 10) + "\n")
+    sc = ss.build(doc)
+    t = (np.arange(sc.n_frames) + 0.5) * ss.HOP / ss.SR
+    seg = sc.f0_hz[(t > 0.12) & (t < 0.28)]
+    assert np.all(np.abs(1200 * np.log2(seg / 261.63) - 30) < 3)        # C4 + 30 c from contour
+
+
+def test_melisma_and_extra_words():
+    doc = parse(SONG.replace('| 1:3.000 "river" 2.000b', '| 1:2.500 "river" 0.500b | 1:2.750 "run" 0.250b'))
+    sc = ss.build(doc)
+    assert sum(sc.frames) == sc.n_frames
+    assert not any("crash" in w for w in sc.warnings)
