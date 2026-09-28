@@ -179,7 +179,7 @@ def test_diffsinger_sings_two_bars_at_the_requested_pitch():
 
 # --- sing orchestrator + render --with-vocals ---------------------------------------------
 
-from soundcode import render_sf, sing  # noqa: E402
+from soundcode import render_sf, sing, soulx  # noqa: E402
 
 
 def test_voice_ref_defaults_to_the_songs_lead_stem(tmp_path, monkeypatch):
@@ -368,6 +368,48 @@ def test_no_vocal_song_renders_instruments_with_a_note(monkeypatch, capsys):
     monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None, **k: {"notes.keys": keys})
     y = render_sf.render(doc, 44100, with_vocals=True)
     assert np.abs(y).max() > 0 and "no lead vocal" in capsys.readouterr().err
+
+
+def test_sing_raises_novocal_when_the_vocal_stream_has_no_words(tmp_path, monkeypatch):
+    """A vocal-family stream with notes but no :text.vox (e.g. a quiet choir/pad
+    line matched via meta stem=lead_vocals) must not be sung 'ah' over -- no
+    words, no singing (task 5a)."""
+    doc = parse("%sc 0.3\n@duration 4.0\n\n:notes.choir inst=voice.choir\n"
+                "meta stem=lead_vocals\n1:1.000 C4 1.000b 90\n")
+
+    def boom(*a, **k):
+        raise AssertionError("SoulX-Singer must not be called with no lyrics")
+    monkeypatch.setattr(soulx, "render", boom)
+    with pytest.raises(ss.NoVocalError, match="no lyrics"):
+        sing.sing(doc, tmp_path / "ref.wav")
+
+
+def test_sing_raises_novocal_when_all_words_are_past_the_end(tmp_path, monkeypatch):
+    doc = parse("%sc 0.3\n@duration 4.0\n\n:notes.choir inst=voice.choir\n"
+                "meta stem=lead_vocals\n1:1.000 C4 1.000b 90\n\n"
+                ":text.vox\n@3.98 \"oh\" 0.500s\n")
+
+    def boom(*a, **k):
+        raise AssertionError("SoulX-Singer must not be called with no lyrics")
+    monkeypatch.setattr(soulx, "render", boom)
+    with pytest.raises(ss.NoVocalError, match="no lyrics"):
+        sing.sing(doc, tmp_path / "ref.wav")
+
+
+def test_render_with_vocals_mixes_the_choir_stream_via_gm_when_it_has_no_words(monkeypatch, capsys):
+    """The instrumental-only fallback (NoVocalError caught in render_sf) must
+    still include the vocal-family stream, rendered as its GM instrument."""
+    doc = parse("%sc 0.3\n@duration 2.0\n\n:notes.choir inst=voice.choir\n"
+                "meta stem=lead_vocals\n@0.0 C4 1.0s 90\n")
+
+    def fail_if_called(*a, **k):
+        raise AssertionError("sing.sing must not call SoulX with no lyrics")
+    monkeypatch.setattr(soulx, "render", fail_if_called)
+    choir = np.full((44100 * 2, 2), 0.2, np.float32)
+    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None, **k: {"notes.choir": choir})
+    y = render_sf.render(doc, 44100, with_vocals=True)
+    assert np.abs(y).max() > 0
+    assert "no lyrics" in capsys.readouterr().err
 
 
 def test_notes_without_words_are_sung_on_ah():

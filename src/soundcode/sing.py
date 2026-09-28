@@ -60,6 +60,15 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
     singer = singer or DEFAULT_SINGER
     import soundfile as sf
 
+    # No sung words, no singing: a vocal-family stream (matched via meta stem=
+    # lead_vocals) with notes but no lyrics is a choir/pad line, not a voice to
+    # clone onto -- it renders as its instrument instead (task 5a). Resolve the
+    # vocal stream first so "no vocal stream at all" keeps its own message.
+    ss.vocal_stream(doc)
+    dur = doc.duration or 0.0
+    if not any(w[0] < dur - 0.05 for w in ss.words(doc)):
+        raise ss.NoVocalError("the vocal stream has no lyrics; rendered as its instrument")
+
     ref = voice_ref(doc, ref)
     settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations,
                 "singer": singer}

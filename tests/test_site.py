@@ -79,6 +79,21 @@ def test_singer_from_the_render_log():
     assert site.singer_from_log("", parse(SC.split(":notes.lead")[0])) is None
 
 
+def test_choir_stream_with_no_words_is_not_a_singer(tmp_path):
+    """A vocal-family stream (meta stem=lead_vocals) with notes but no
+    :text.vox -- e.g. a quiet choir/pad line ASR found nothing in -- must not
+    be reported as sung (task 5a: no singing without words)."""
+    choir = SC.replace(
+        ":notes.lead inst=voice.lead\nmeta stem=lead_vocals\n1:1.000  E4  1.000b 90\n",
+        ":notes.choir inst=voice.choir\nmeta stem=lead_vocals\n1:1.000  E4  1.000b 90\n",
+    ).split(":text.vox")[0]
+    doc = parse(choir)
+    assert not site.sung(doc)
+    assert site.voice_bytes(doc, "soulx") == 0
+    assert site.singer_from_log("with-vocals: the vocal stream has no lyrics; "
+                                "rendered as its instrument; rendering instruments only", doc) is None
+
+
 def test_summary():
     s = site.summary(parse(SC))
     assert s["tempo"] == 110
