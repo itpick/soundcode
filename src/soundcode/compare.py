@@ -183,6 +183,19 @@ def _sc_words(doc) -> list[str]:
             for w in (normalise(x) for x in e.text.replace("-", " ").split()) if w]
 
 
+def _sung_words(doc) -> list[str]:
+    """The .sc words the singer is given: those starting before the song ends
+    (sing_score drops the rest, so scoring them would count words never asked for)."""
+    from .expand import _seconds, build_grid
+    from .lyrics import normalise
+    s = doc.stream("text.vox")
+    if s is None:
+        return []
+    end, grid = doc.duration, build_grid(doc)
+    return [w for e in s.events if e.text and not (end and _seconds(e, grid) >= end - 0.05)
+            for w in (normalise(x) for x in e.text.replace("-", " ").split()) if w]
+
+
 def lyric_wer(doc) -> float | None:
     """.sc lyrics vs the published lyrics in the clip window (cache only: never
     hits the network from compare)."""
@@ -204,7 +217,7 @@ def sung_wer(doc, wav) -> float | None:
     from faster_whisper import WhisperModel
 
     from .lyrics import normalise
-    ref = _sc_words(doc)
+    ref = _sung_words(doc)
     if not ref:
         return None
     from .lyrics import asr_download_root

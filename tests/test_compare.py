@@ -230,3 +230,10 @@ def test_lyric_wer_uses_only_the_cached_reference(tmp_path, monkeypatch):
                 ':text.vox\n@0.5 "walk" | @0.8 "me" | @1.0 "down" | @1.2 "to" | @1.4 "the" | @1.6 "harder"\n')
     monkeypatch.setattr(ly.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
     assert cmp.lyric_wer(doc) == pytest.approx(1 / 6)
+
+
+def test_sung_words_are_only_those_inside_the_song():
+    from soundcode.parser import parse
+    doc = parse('%sc 0.3\n@duration 2.0\n\n:text.vox\n@0.5 "walk" | @1.0 "down-town" | @1.97 "oh" | @2.5 "oh"\n')
+    assert cmp._sc_words(doc) == ["walk", "down", "town", "oh", "oh"]
+    assert cmp._sung_words(doc) == ["walk", "down", "town"]   # the singer drops words past the end
