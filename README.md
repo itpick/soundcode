@@ -85,6 +85,11 @@ renderer applies both (`--no-fx` to compare). Parts now sound far closer to the
 original: spectral difference 6–9 dB → 1–2 dB per part, and drums 0.4–0.9 dB with the kit
 (`docs/results/2026-09-27-production-match.md`).
 
+**Correct words, better singing.** Lyrics come from large-v3-turbo ASR reconciled with
+LRCLIB's published lyrics (`encode --title --artist`). The default singer is
+SoulX-Singer on the GPU box (voice similarity 0.96, pitch 15 c), with DiffSinger →
+Seed-VC as the fallback (`--singer`). Results: `docs/results/2026-09-27-lyrics-and-voice.md`.
+
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.

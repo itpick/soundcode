@@ -212,8 +212,8 @@ def test_sing_uses_the_cache_and_chains_the_engines(tmp_path, monkeypatch):
     def fake_convert(src, r, out, steps=30):
         calls.append("vc"); sf.write(str(out), np.zeros(44100, np.float32), 44100); return out
     monkeypatch.setattr(sing.seedvc, "convert", fake_convert)
-    p1, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c")
-    p2, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c")
+    p1, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c", singer="diffsinger")
+    p2, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c", singer="diffsinger")
     assert p1 == p2 and p1.exists() and calls == ["ds", "vc"]
 
 

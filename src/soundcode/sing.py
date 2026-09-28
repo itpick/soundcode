@@ -51,7 +51,7 @@ def cache_key(doc, ref: Path, settings: dict) -> str:
     return h.hexdigest()[:16]
 
 
-DEFAULT_SINGER = "diffsinger"
+DEFAULT_SINGER = "soulx"      # chosen by ear (2026-09-27) and voice/pitch/timing scores
 
 
 def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
