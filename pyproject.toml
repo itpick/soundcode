@@ -26,6 +26,14 @@ encode = [
     "matplotlib",
     "pedalboard>=0.9",
 ]
+# Benchmark scorer. See docs/superpowers/specs/2026-09-28-benchmark-scorer-design.md.
+score = [
+    # ==4.46.3, not >=: MERT's trust_remote_code Hubert subclass (HubertEncoder_extend)
+    # breaks under transformers 5.x (encoder_outputs.hidden_states comes back None).
+    # Seed-VC pins the same version for the same reason (scripts/install_seedvc.sh).
+    "transformers==4.46.3",   # MERT (m-a-p/MERT-v1-95M) frame embeddings
+    "nnAudio",                # MERT's remote code
+]
 
 [project.scripts]
 soundcode = "soundcode.cli:main"
