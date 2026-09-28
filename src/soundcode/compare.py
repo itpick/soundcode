@@ -225,7 +225,7 @@ def _write_wav(path: Path, y_mono: np.ndarray) -> None:
 
 def run(original, sc_or_wav, out_dir, engine: str = "sf2",
         render_streams=None, stems_dir=None, with_vocals: bool = False,
-        voice_ref=None) -> dict:
+        voice_ref=None, no_fx: bool = False) -> dict:
     from .parser import parse_file
     from .separate import STEMS, default_out_dir, read_stereo, separate
 
@@ -248,8 +248,10 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
         if render_streams is None:
             if engine == "mock":
                 raise ValueError("compare needs per-stream renders; use --engine sf2")
-            from .render_sf import render_streams
-        streams = render_streams(doc, sr=doc.sample_rate)
+            from . import render_sf
+            render_streams = render_sf.render_streams
+        streams = (render_streams(doc, sr=doc.sample_rate, no_fx=True) if no_fx
+                   else render_streams(doc, sr=doc.sample_rate))
         for name, y in streams.items():
             stem = stem_for_stream(doc, name)
             if stem == "vocals":

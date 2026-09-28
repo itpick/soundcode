@@ -103,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     p_cmp.add_argument("--with-vocals", action="store_true",
                        help="score the sung lead vocal (DiffSinger -> Seed-VC)")
     p_cmp.add_argument("--voice-ref", default=None)
+    p_cmp.add_argument("--no-fx", action="store_true", help="render without fx lines (A/B)")
 
     p_encode = sub.add_parser("encode", help="analyse audio and write a .sc file")
     p_encode.add_argument("file")
@@ -176,7 +177,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 rep = cmp.run(args.original, args.render, out, engine=args.engine,
                               with_vocals=args.with_vocals,
-                              voice_ref=Path(args.voice_ref) if args.voice_ref else None)
+                              voice_ref=Path(args.voice_ref) if args.voice_ref else None,
+                              no_fx=args.no_fx)
             except SingError as exc:
                 print(f"compare failed: {exc}", file=sys.stderr)
                 return 2

@@ -192,3 +192,21 @@ def test_spectral_db_is_zero_for_the_same_sound_and_grows_with_a_tilt():
     dark = np.fft.irfft(Y * 10 ** (-6 * np.log2(np.maximum(f, 20) / 1000) / 20), len(a)).astype(np.float32)
     assert cmp.spectral_db(a, dark, SR) > 6
     assert cmp.spectral_db(a, np.zeros_like(a), SR) is None
+
+
+def test_compare_passes_no_fx_to_the_renderer(tmp_path, monkeypatch):
+    seen = {}
+    def fake_render_streams(doc, sr=None, sf2=None, no_fx=False):
+        seen["no_fx"] = no_fx
+        return {}
+    import soundcode.render_sf as rsf
+    monkeypatch.setattr(rsf, "render_streams", fake_render_streams)
+    import soundfile as sf
+    from soundcode import separate as sep
+    d = tmp_path / "stems"; d.mkdir()
+    for s in sep.STEMS:
+        sf.write(str(d / f"{s}.wav"), np.zeros((22050, 2), np.float32), 22050)
+    sc = tmp_path / "s.sc"; sc.write_text("%sc 0.3\n@duration 1.0\n")
+    monkeypatch.setattr(cmp, "transcribe", lambda p: (np.zeros((0, 2)), np.zeros(0)))
+    cmp.run(tmp_path / "o.wav", sc, tmp_path / "c", stems_dir=d, no_fx=True)
+    assert seen["no_fx"] is True
