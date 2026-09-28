@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sound to Code</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f9;
+    --bg-card: #ffffff;
+    --fg: #1a1a1e;
+    --muted: #55565f;
+    --border: #dcdce2;
+    --accent: #3d5af1;
+    --accent-2: #7b3df1;
+    --bar-track: #e7e7ee;
+    --bar-wav: #b8bccb;
+    --bar-mp3: #7b8ad1;
+    --bar-sc: #3d5af1;
+    --bar-scgz: #7b3df1;
+    --chip-bg: #eef0fb;
+    --chip-fg: #33366b;
+    --warn-bg: #fff2ea;
+    --warn-fg: #7a3b12;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101116;
+      --bg-card: #181a22;
+      --fg: #edeef2;
+      --muted: #a3a5b3;
+      --border: #2c2e3a;
+      --accent: #7f96ff;
+      --accent-2: #c39bff;
+      --bar-track: #23252f;
+      --bar-wav: #40424f;
+      --bar-mp3: #57619e;
+      --bar-sc: #7f96ff;
+      --bar-scgz: #c39bff;
+      --chip-bg: #1f2233;
+      --chip-fg: #c3c8ff;
+      --warn-bg: #2c2013;
+      --warn-fg: #f0b585;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 0 16px;
+  }
+  header.hero {
+    padding: 40px 0 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  header.hero h1 {
+    margin: 0 0 8px;
+    font-size: 1.8rem;
+  }
+  header.hero p.tagline {
+    margin: 0 0 20px;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+  .totals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 28px;
+  }
+  .totals .stat {
+    display: flex;
+    flex-direction: column;
+  }
+  .totals .stat .n {
+    font-size: 1.4rem;
+    font-weight: 600;
+  }
+  .totals .stat .l {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  #status {
+    padding: 16px 0;
+    color: var(--warn-fg);
+    background: var(--warn-bg);
+    border-radius: 8px;
+    display: none;
+  }
+  #status.show {
+    display: block;
+    padding: 12px 16px;
+    margin-top: 16px;
+  }
+  .cards {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding: 28px 0 48px;
+  }
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card h2 {
+    margin: 0 0 4px;
+    font-size: 1.25rem;
+  }
+  .card .artist {
+    margin: 0 0 16px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+  .players {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .players .player {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .players .player h3 {
+    margin: 0 0 6px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .players audio {
+    width: 100%;
+  }
+  @media (max-width: 700px) {
+    .players {
+      flex-direction: column;
+    }
+  }
+  .size-strip {
+    margin: 18px 0;
+  }
+  .size-strip h3, .card .section-title {
+    margin: 0 0 10px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .bar-row {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+  }
+  .bar-row .bar-name {
+    color: var(--muted);
+  }
+  .bar-track {
+    position: relative;
+    background: var(--bar-track);
+    border-radius: 5px;
+    height: 20px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 5px;
+    height: 100%;
+  }
+  .bar-label {
+    position: relative;
+    display: block;
+    padding: 0 8px;
+    line-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .borrowed {
+    margin: 14px 0;
+    padding: 10px 14px;
+    background: var(--chip-bg);
+    color: var(--chip-fg);
+    border-radius: 8px;
+    font-size: 0.85rem;
+  }
+  .singer-line {
+    margin: 4px 0 14px;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 4px 0 16px;
+  }
+  .chip {
+    background: var(--chip-bg);
+    color: var(--chip-fg);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 0.8rem;
+  }
+  details.code {
+    margin-top: 10px;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+  details.code summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  details.code pre {
+    margin: 12px 0;
+    padding: 12px;
+    background: var(--bar-track);
+    border-radius: 8px;
+    max-height: 320px;
+    overflow: auto;
+    font-size: 0.78rem;
+    white-space: pre;
+  }
+  details.code .dl {
+    font-size: 0.85rem;
+  }
+  a {
+    color: var(--accent);
+  }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 24px 0 48px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+  footer p {
+    margin: 0 0 8px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>Sound to code</h1>
+    <p class="tagline">A song goes in, a text "sound code" comes out — and the song is rebuilt from that code alone. These four clips show the original next to the rebuild, and how small the code really is.</p>
+    <div class="totals" id="totals"></div>
+    <div id="status"></div>
+  </header>
+  <main class="cards" id="cards"></main>
+  <footer id="footer"></footer>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  function el(tag, opts) {
+    var e = document.createElement(tag);
+    opts = opts || {};
+    if (opts.text != null) e.textContent = opts.text;
+    if (opts.cls) e.className = opts.cls;
+    if (opts.href != null) e.setAttribute("href", opts.href);
+    if (opts.attrs) {
+      for (var k in opts.attrs) e.setAttribute(k, opts.attrs[k]);
+    }
+    return e;
+  }
+
+  function fmtKB(bytes) {
+    return Math.round(bytes / 1000) + " KB";
+  }
+
+  function fmtMB(bytes) {
+    return (bytes / 1e6).toFixed(1) + " MB";
+  }
+
+  function ratioOf(wav, bytes) {
+    return Math.round(wav / bytes);
+  }
+
+  // ---- hero totals ----
+
+  function buildTotals(container, totals) {
+    container.textContent = "";
+    var wavRatio = ratioOf(totals.wav, totals.sc);
+    var gzRatio = ratioOf(totals.wav, totals.sc_gz);
+    var stats = [
+      ["Original WAV", fmtMB(totals.wav)],
+      [".sc code", fmtKB(totals.sc) + " (×" + wavRatio + ")"],
+      [".sc gzipped", fmtKB(totals.sc_gz) + " (×" + gzRatio + ")"],
+    ];
+    stats.forEach(function (pair) {
+      var stat = el("div", { cls: "stat" });
+      stat.appendChild(el("span", { cls: "n", text: pair[1] }));
+      stat.appendChild(el("span", { cls: "l", text: pair[0] }));
+      container.appendChild(stat);
+    });
+  }
+
+  // ---- players (Task 4 will replace this function's body with a Web Audio transport) ----
+
+  function buildPlayers(song) {
+    var row = el("div", { cls: "players" });
+
+    var orig = el("div", { cls: "player" });
+    orig.appendChild(el("h3", { text: "Original (30 s)" }));
+    var origAudio = el("audio", { attrs: { controls: "", preload: "none", src: song.original } });
+    orig.appendChild(origAudio);
+    row.appendChild(orig);
+
+    var rebuilt = el("div", { cls: "player" });
+    rebuilt.appendChild(el("h3", { text: "Rebuilt from code" }));
+    var rebuiltAudio = el("audio", { attrs: { controls: "", preload: "none", src: song.rebuild } });
+    rebuilt.appendChild(rebuiltAudio);
+    row.appendChild(rebuilt);
+
+    return row;
+  }
+
+  // ---- size strip ----
+
+  function buildSizeStrip(song) {
+    var wrap = el("div", { cls: "size-strip" });
+    wrap.appendChild(el("h3", { text: "Size, on a log scale" }));
+
+    var wav = song.sizes.wav;
+    var rows = [
+      ["WAV", song.sizes.wav, 1, "bar-wav"],
+      ["MP3", song.sizes.mp3, song.ratios.mp3, "bar-mp3"],
+      [".sc", song.sizes.sc, song.ratios.sc, "bar-sc"],
+      [".sc gz", song.sizes.sc_gz, song.ratios.sc_gz, "bar-scgz"],
+    ];
+    rows.forEach(function (r) {
+      var name = r[0], bytes = r[1], ratio = r[2], cls = r[3];
+      var row = el("div", { cls: "bar-row" });
+      row.appendChild(el("span", { cls: "bar-name", text: name }));
+      var track = el("div", { cls: "bar-track" });
+      var pct = (Math.log10(bytes) / Math.log10(wav)) * 100;
+      var fill = el("span", { cls: "bar-fill " + cls });
+      fill.style.width = Math.max(pct, 2) + "%";
+      track.appendChild(fill);
+      track.appendChild(el("span", { cls: "bar-label", text: fmtKB(bytes) + " · ×" + ratio }));
+      row.appendChild(track);
+      wrap.appendChild(row);
+    });
+    return wrap;
+  }
+
+  // ---- borrowed audio line ----
+
+  function buildBorrowed(song) {
+    var kit = song.sizes.kit, voice = song.sizes.voice;
+    if (kit === 0 && voice === 0) return null;
+    var parts = [];
+    if (kit > 0) parts.push("drum kit " + fmtKB(kit));
+    if (voice > 0) parts.push("voice sample " + fmtKB(voice));
+    var text = "Also borrowed from the recording: " + parts.join(", ") +
+      " → ×" + song.ratios.with_borrowed + " overall";
+    return el("div", { cls: "borrowed", text: text });
+  }
+
+  // ---- singer line ----
+
+  function singerLabel(singer) {
+    if (singer === "soulx") return "Sung by SoulX-Singer";
+    if (singer === "diffsinger") return "Sung by DiffSinger + Seed-VC";
+    return "Instrumental";
+  }
+
+  // ---- summary chips ----
+
+  function buildChips(summary) {
+    var wrap = el("div", { cls: "chips" });
+    if (summary.tempo != null) {
+      wrap.appendChild(el("span", { cls: "chip", text: summary.tempo + " BPM" }));
+    }
+    if (summary.instruments && summary.instruments.length) {
+      wrap.appendChild(el("span", { cls: "chip", text: summary.instruments.join(", ") }));
+    }
+    wrap.appendChild(el("span", { cls: "chip", text: summary.words + " words" }));
+    return wrap;
+  }
+
+  // ---- the code itself ----
+
+  function buildCode(song) {
+    var details = el("details", { cls: "code" });
+    var summaryEl = el("summary", { text: "Show the sound code (" + fmtKB(song.sizes.sc) + ")" });
+    details.appendChild(summaryEl);
+    var pre = el("pre");
+    details.appendChild(pre);
+    var dl = el("a", { cls: "dl", text: "Download .sc", href: song.sc, attrs: { download: "" } });
+    details.appendChild(dl);
+    fetch(song.sc)
+      .then(function (r) { return r.text(); })
+      .then(function (t) { pre.textContent = t; })
+      .catch(function () { pre.textContent = "(could not load the code)"; });
+    return details;
+  }
+
+  // ---- one card per song ----
+
+  function buildCard(song) {
+    var card = el("div", { cls: "card" });
+    card.appendChild(el("h2", { text: song.title }));
+    card.appendChild(el("p", { cls: "artist", text: song.artist }));
+    card.appendChild(buildPlayers(song));
+    card.appendChild(buildSizeStrip(song));
+    var borrowed = buildBorrowed(song);
+    if (borrowed) card.appendChild(borrowed);
+    card.appendChild(el("p", { cls: "singer-line", text: singerLabel(song.singer) }));
+    card.appendChild(buildChips(song.summary));
+    card.appendChild(buildCode(song));
+    return card;
+  }
+
+  // ---- footer ----
+
+  function buildFooter(container, data) {
+    container.textContent = "";
+    var p1 = el("p");
+    var creditLink = el("a", { text: data.credit, href: data.license_url, attrs: { target: "_blank", rel: "noopener" } });
+    p1.appendChild(creditLink);
+    p1.appendChild(document.createTextNode(" — these rebuilds are non-commercial derivatives shared under the same license."));
+    container.appendChild(p1);
+
+    container.appendChild(el("p", {
+      text: "Private research project; rebuilds made with open models: audio-separator, tsumugi, torchcrepe, faster-whisper, GeneralUser GS, SoulX-Singer."
+    }));
+
+    container.appendChild(el("p", { text: "Built " + data.built + "." }));
+  }
+
+  // ---- boot ----
+
+  function showStatus(text) {
+    var status = document.getElementById("status");
+    status.textContent = text;
+    status.className = "show";
+  }
+
+  function renderPage(data) {
+    buildTotals(document.getElementById("totals"), data.totals);
+    var cards = document.getElementById("cards");
+    cards.textContent = "";
+    data.songs.forEach(function (song) {
+      cards.appendChild(buildCard(song));
+    });
+    buildFooter(document.getElementById("footer"), data);
+  }
+
+  fetch('data.json')
+    .then(function (r) {
+      if (!r.ok) throw new Error("data.json: " + r.status);
+      return r.json();
+    })
+    .then(renderPage)
+    .catch(function () {
+      showStatus("Open this page through a web server: python -m http.server -d site");
+    });
+})();
+</script>
+</body>
+</html>

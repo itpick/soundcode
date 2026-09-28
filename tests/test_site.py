@@ -222,3 +222,13 @@ def test_build_with_subset_replaces_entire_site(tmp_path, monkeypatch):
     on_disk2 = json.loads((root / "site" / "data.json").read_text())
     assert len(on_disk2["songs"]) == 1
     assert on_disk2["songs"][0]["slug"] == "discipline-30s"
+
+
+def test_page_reads_data_json_safely():
+    html = (Path(__file__).resolve().parents[1] / "site" / "index.html").read_text()
+    assert "fetch('data.json')" in html
+    assert "python -m http.server -d site" in html          # file:// fallback message
+    assert "innerHTML" not in html                          # data shown with textContent only
+    for key in ("sizes", "ratios", "sc_gz", "with_borrowed", "singer", "license_url", "totals"):
+        assert key in html
+    assert "<script src=" not in html                        # no external scripts
