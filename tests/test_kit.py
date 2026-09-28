@@ -76,3 +76,20 @@ def test_render_uses_the_kit_and_falls_back_when_it_is_gone(tmp_path):
     shutil.rmtree(tmp_path / "s.kit")
     y2 = render_sf.render_streams(parse_file(str(sc)), sf2=sf2)["perc.drums"]
     assert np.abs(y2).max() > 0.01                                     # full GM fallback, no crash
+
+
+def test_simultaneous_hits_crowd_each_other():
+    got = kit.isolated([(1.0, "kick", 100), (1.0, "hat", 60), (3.0, "kick", 90)])
+    assert got.get("kick") == [3.0] and "hat" not in got
+
+
+def test_render_reports_a_missing_kit(tmp_path, capsys):
+    import pytest
+    from soundcode import render_sf
+    sf2 = Path(__file__).resolve().parents[1] / "models" / "soundfonts" / "GeneralUser-GS.sf2"
+    if not sf2.exists():
+        pytest.skip("no SoundFont")
+    sc = tmp_path / "s.sc"
+    sc.write_text("%sc 0.3\n@duration 1.0\n\n:perc.drums inst=drums.kit\nmeta kit=gone.kit\n@0.2 kick 100\n")
+    render_sf.render(parse_file(str(sc)), 44100, sf2=sf2)
+    assert "gone.kit" in capsys.readouterr().err

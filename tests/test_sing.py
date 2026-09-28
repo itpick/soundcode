@@ -402,3 +402,19 @@ def test_compare_with_vocals_errors_are_one_line(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cmp, "run", boom)
     assert cli.main(["compare", "a.wav", "b.sc", "--with-vocals", "-o", str(tmp_path)]) == 2
     assert "bank missing" in capsys.readouterr().err
+
+
+def test_sung_vocal_gets_the_lead_streams_fx(tmp_path):
+    import soundfile as sf
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    y = np.zeros(sr * 3, np.float32)
+    y[:sr * 2] = 0.3 * np.sin(2 * np.pi * 220 * t) * (t < 0.3)
+    wav = tmp_path / "sung.wav"
+    sf.write(str(wav), y, sr)
+    base = "%sc 0.3\n\n:notes.lead inst=voice.lead\nmeta stem=lead_vocals level=-30.0\n"
+    dry = render_sf._load_stream(wav, sr, sr * 3, parse(base).stream("notes.lead"))
+    wet = render_sf._load_stream(wav, sr, sr * 3,
+                                 parse(base + "fx  rt60=1.5s  wet=0.35  width=0.5\n").stream("notes.lead"))
+    tail = slice(int(0.6 * sr), int(1.2 * sr))
+    assert np.abs(wet[tail]).mean() > 3 * np.abs(dry[tail]).mean()

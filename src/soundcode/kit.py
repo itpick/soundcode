@@ -18,10 +18,12 @@ PRE_S, MAX_S, FADE_IN_S, FADE_OUT_S = 0.005, 0.6, 0.005, 0.02
 
 def isolated(hits: list[tuple[float, str, int]], before: float = 0.08,
              after: float = 0.15) -> dict[str, list[float]]:
-    times = sorted(t for t, _, _ in hits)
+    times = [t for t, _, _ in hits]
     by_voice: dict[str, list[tuple[float, int]]] = {}
-    for t, v, vel in hits:
-        crowded = any(0 < t - u <= before or 0 < u - t <= after for u in times if u != t)
+    for i, (t, v, vel) in enumerate(hits):
+        # any *other* hit, including one at the very same instant, crowds this one
+        crowded = any(0 <= t - u <= before or 0 <= u - t <= after
+                      for j, u in enumerate(times) if j != i)
         if not crowded:
             by_voice.setdefault(v, []).append((t, vel))
     out = {}

@@ -63,6 +63,8 @@ def measure(stereo: np.ndarray, sr: int, offsets: list[float]) -> Fx:
     # width = how different the channels are (a panned mono source is 0 wide)
     corr = np.sum(l * r) / (np.sqrt(np.sum(l ** 2) * np.sum(r ** 2)) + 1e-20)
     f.width = float(np.clip(1 - abs(corr), 0, 1))
+    if min(np.mean(l ** 2), np.mean(r ** 2)) < 1e-3 * max(np.mean(l ** 2), np.mean(r ** 2)):
+        f.width = 0.0                     # one channel ~silent: a hard-panned mono source
     el, er = np.mean(l ** 2), np.mean(r ** 2)
     f.pan = float(np.clip((er - el) / (er + el + 1e-20), -1, 1))
     f.crest = float(20 * np.log10(np.abs(mono).max() / (np.sqrt(np.mean(mono.astype(np.float64) ** 2)) + 1e-20)))
@@ -102,6 +104,11 @@ def fx_line(f: Fx) -> str:
             f"pan={f.pan:.2f}  crest={f.crest:.1f}dB")
 
 
+# hand-edited .sc files are allowed: anything outside these ranges is clamped
+_RANGES = {"rt60": (0.1, 4.0), "wet": (0.0, 1.0), "width": (0.0, 1.0), "pan": (-1.0, 1.0),
+           "crest": (0.0, 60.0)}
+
+
 def parse_fx(stream) -> Fx | None:
     if stream is None:
         return None
@@ -113,12 +120,13 @@ def parse_fx(stream) -> Fx | None:
             k, _, v = tok.partition("=")
             try:
                 if k == "eq":
-                    vals = [int(x) for x in v.split(",") if x.strip()]
+                    vals = [int(np.clip(int(x), -60, 60)) for x in v.split(",") if x.strip()]
                     f.eq = vals if len(vals) == len(BANDS) else []
-                elif k in ("rt60", "crest"):
-                    setattr(f, k, float(v.rstrip("sdB")))
-                elif k in ("wet", "width", "pan"):
-                    setattr(f, k, float(v))
+                elif k in _RANGES:
+                    x = float(v.rstrip("sdB"))
+                    if np.isfinite(x):
+                        lo, hi = _RANGES[k]
+                        setattr(f, k, float(np.clip(x, lo, hi)))
             except ValueError:
                 continue
         return f
@@ -157,16 +165,20 @@ def apply(stereo: np.ndarray, sr: int, f: Fx) -> np.ndarray:
     import pedalboard as pb
 
     y = eq_match(stereo, sr, f.eq) if f.eq else stereo
-    boards = []
-    have_crest = 20 * np.log10(np.abs(y).max() / (np.sqrt(np.mean(y.astype(np.float64) ** 2)) + 1e-20) + 1e-20)
-    if have_crest - f.crest > 3:
-        ratio = float(np.clip(1 + (have_crest - f.crest) / 6, 1.5, 6.0))
-        boards.append(pb.Compressor(threshold_db=-24, ratio=ratio, attack_ms=10, release_ms=120))
+    mono = y.mean(1).astype(np.float64)
+    rms = float(np.sqrt(np.mean(mono ** 2)))
+    have_crest = 20 * np.log10(np.abs(mono).max() / (rms + 1e-20) + 1e-20) if rms > 0 else 0.0
+    if rms > 0 and have_crest - f.crest > 3:
+        # limit peaks to (RMS + target crest) at a fixed working level, so the
+        # threshold means the same on every part whatever the synth's level
+        g = 10 ** (-20 / 20) / rms
+        lim = pb.Pedalboard([pb.Limiter(threshold_db=float(-20 + max(f.crest, 3.0)),
+                                        release_ms=80)])
+        y = lim((y * g).T.astype(np.float32), sr).T / g
     if f.wet > 0.02:
-        boards.append(pb.Reverb(room_size=_room_size(f.rt60), wet_level=f.wet,
-                                dry_level=1 - f.wet / 2, width=1.0))
-    if boards:
-        y = pb.Pedalboard(boards)(y.T.astype(np.float32), sr).T
+        verb = pb.Pedalboard([pb.Reverb(room_size=_room_size(f.rt60), wet_level=f.wet,
+                                        dry_level=1 - f.wet / 2, width=1.0)])
+        y = verb(y.T.astype(np.float32), sr).T
     mid, side = (y[:, 0] + y[:, 1]) / 2, (y[:, 0] - y[:, 1]) / 2
     side_now = np.sqrt(np.mean(side ** 2)) / (np.sqrt(np.mean(mid ** 2)) + 1e-12)
     want = f.width                                                 # side/mid ~ 1 - |corr|

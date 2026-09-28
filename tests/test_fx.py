@@ -158,3 +158,34 @@ def test_default_fx_does_not_shift_timing():
     import scipy.signal as sg
     c = sg.correlate(env_out - env_out.mean(), env_in - env_in.mean(), mode="full", method="fft")
     assert abs(np.argmax(c) - (len(env_in) - 1)) < int(0.01 * SR)
+
+
+# --- final-review fixes ---------------------------------------------------------------------
+
+def test_parse_fx_clamps_and_rejects_non_finite():
+    s = parse("%sc 0.3\n\n:notes.p\nfx  wet=5  pan=nan  rt60=1e9s  width=-3  crest=-inf\n").stream("notes.p")
+    f = fx.parse_fx(s)
+    assert f.wet == 1.0 and f.pan == 0.0 and f.rt60 == 4.0 and f.width == 0.0 and f.crest == 12.0
+    y = np.stack([noise(1.0, 8)] * 2, 1)
+    out = fx.apply(y, SR, f)
+    assert np.all(np.isfinite(out))
+
+
+def test_hard_panned_mono_is_not_wide():
+    l = noise(seed=9)
+    f = fx.measure(np.stack([l, np.zeros_like(l)]), SR, [])
+    assert f.width == 0.0 and f.pan < -0.9
+
+
+def test_compressor_follows_the_signal_level_not_an_absolute_threshold():
+    t = np.arange(SR * 2) / SR
+    spiky = np.zeros(SR * 2, np.float32)
+    burst = np.sin(2 * np.pi * 440 * np.arange(900) / SR) * np.hanning(900)
+    for i in range(0, SR * 2 - 900, 11025):
+        spiky[i:i + 900] = burst                              # 20 ms tone bursts: crest far above target
+    quiet = np.stack([0.003 * spiky + 0.0005 * np.sin(2 * np.pi * 200 * t)] * 2, 1).astype(np.float32)
+    def crest(y):
+        m = y.mean(1)
+        return 20 * np.log10(np.abs(m).max() / np.sqrt(np.mean(m.astype(np.float64) ** 2)))
+    out = fx.apply(quiet, SR, fx.Fx(eq=[], rt60=0.3, wet=0.0, width=0.0, crest=6.0))
+    assert crest(out) < crest(quiet) - 3
