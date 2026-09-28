@@ -49,7 +49,7 @@ def _notes(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
         os.unlink(path)
 
 
-def _f0(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
+def _f0(y: np.ndarray, sr: int, fmin: float = 50.0) -> tuple[np.ndarray, np.ndarray]:
     """torchcrepe f0 at 16 kHz, 10 ms hop, weighted_argmax; voiced = periodicity >= 0.5."""
     import librosa
     import torch
@@ -60,28 +60,53 @@ def _f0(y: np.ndarray, sr: int) -> tuple[np.ndarray, np.ndarray]:
     hop = int(round(16000 * 0.01))
     hz, periodicity = torchcrepe.predict(
         torch.tensor(y16, dtype=torch.float32)[None], 16000, hop_length=hop,
-        fmin=50.0, fmax=1100.0, model="full", return_periodicity=True,
+        fmin=fmin, fmax=1100.0, model="full", return_periodicity=True,
         batch_size=512, device="cpu", decoder=torchcrepe.decode.weighted_argmax)
     return hz[0].numpy(), (periodicity[0].numpy() >= 0.5)
 
 
-def _logspec(y: np.ndarray, sr: int) -> np.ndarray:
-    """1/12-octave log-spectrum per frame: |STFT|^2 pooled into 12-per-octave
-    bands from 40 Hz to 16 kHz, in dB. Shape (n_bands, n_frames)."""
+def _logspec_bands(sr: int) -> list[tuple[float, np.ndarray]]:
+    """1/12-octave (center, bin-mask) pairs from 40 Hz up to 16 kHz (and never
+    above Nyquist), keeping only bands that actually contain >= 1 STFT bin at
+    this n_fft/sr.
+
+    Adjacent nominal bands' edges touch exactly (edge = 2**(1/24) is half a
+    1/12-octave), so a bin either falls in the nominal band whose range
+    contains its frequency, or it doesn't fall in ANY band's range yet — a
+    band whose mask is empty therefore has no bin anywhere in [40 Hz, 16 kHz]
+    that "belongs" to it and would otherwise go uncounted; dropping it loses
+    no energy, it just stops manufacturing a permanent -inf-dB band that
+    every file would otherwise share.
+    """
     import librosa
 
-    n_bands = int(np.floor(12 * np.log2(_LOGSPEC_HI / _LOGSPEC_LO))) + 1
-    bands = _LOGSPEC_LO * 2.0 ** (np.arange(n_bands) / 12.0)
-    if y.size == 0:
-        return np.zeros((n_bands, 0))
-    power = np.abs(librosa.stft(y, n_fft=_LOGSPEC_N_FFT, hop_length=_LOGSPEC_HOP)) ** 2
     freqs = librosa.fft_frequencies(sr=sr, n_fft=_LOGSPEC_N_FFT)
     edge = 2.0 ** (1.0 / 24.0)
-    out = np.full((n_bands, power.shape[1]), -200.0)
-    for i, fc in enumerate(bands):
+    nyq = freqs[-1]
+    n_nominal = int(np.floor(12 * np.log2(_LOGSPEC_HI / _LOGSPEC_LO))) + 1
+    out: list[tuple[float, np.ndarray]] = []
+    for fc in _LOGSPEC_LO * 2.0 ** (np.arange(n_nominal) / 12.0):
+        if fc > nyq:
+            break
         mask = (freqs >= fc / edge) & (freqs < fc * edge)
         if mask.any():
-            out[i] = 10.0 * np.log10(power[mask].sum(axis=0) + 1e-20)
+            out.append((float(fc), mask))
+    return out
+
+
+def _logspec(y: np.ndarray, sr: int) -> np.ndarray:
+    """1/12-octave log-spectrum per frame: |STFT|^2 pooled into 12-per-octave
+    bands from 40 Hz to 16 kHz, in dB. Shape (n_bands, n_frames); every band
+    holds real energy from >= 1 STFT bin (no permanently-empty filler rows)."""
+    import librosa
+
+    bands = _logspec_bands(sr)
+    if y.size == 0 or not bands:
+        return np.zeros((len(bands), 0))
+    power = np.abs(librosa.stft(y, n_fft=_LOGSPEC_N_FFT, hop_length=_LOGSPEC_HOP)) ** 2
+    out = np.empty((len(bands), power.shape[1]))
+    for i, (_fc, mask) in enumerate(bands):
+        out[i] = 10.0 * np.log10(power[mask].sum(axis=0) + 1e-20)
     return out
 
 
@@ -100,7 +125,7 @@ class Features:
     voiced: np.ndarray | None                    # bool, 100 Hz, only when f0
 
     @staticmethod
-    def of(y: np.ndarray, sr: int, pitched: bool, f0: bool) -> "Features":
+    def of(y: np.ndarray, sr: int, pitched: bool, f0: bool, f0_fmin: float = 50.0) -> "Features":
         import librosa
 
         mono = np.asarray(_mono_mix(y), dtype=np.float32)
@@ -112,7 +137,7 @@ class Features:
         rms = librosa.feature.rms(y=mono, hop_length=_HOP)[0]
         logspec = _logspec(mono, SR)
         notes = _notes(mono, SR) if pitched else None
-        hz, voiced = _f0(mono, SR) if f0 else (None, None)
+        hz, voiced = _f0(mono, SR, fmin=f0_fmin) if f0 else (None, None)
         return Features(mono, SR, onsets, chroma, rms, logspec, notes, hz, voiced)
 
 
@@ -173,7 +198,11 @@ def _logspec_db(ref: Features, est: Features, a: float, b: float) -> float | Non
     live = r >= (r.max() - _LOGSPEC_LIVE_DB)
     if not live.any():
         return None
-    r_norm, e_norm = r - r.mean(), e - e.mean()
+    # normalise by the mean over the LIVE bands only (mirrors fx.band_db's
+    # `db - db[live].mean()`): averaging in quiet/irrelevant bands would let
+    # a pure level difference between ref and est leak into the score,
+    # since those bands don't move by the same amount as the live ones.
+    r_norm, e_norm = r - r[live].mean(), e - e[live].mean()
     return float(np.mean(np.abs(r_norm[live] - e_norm[live])))
 
 

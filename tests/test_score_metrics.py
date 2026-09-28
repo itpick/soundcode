@@ -19,7 +19,7 @@ def tone(freq, secs, sr=SR, amp=0.3):
 @pytest.fixture(autouse=True)
 def no_models(monkeypatch):
     monkeypatch.setattr(metrics, "_notes", lambda y, sr: (np.array([[0.5, 1.5], [2.0, 3.0]]), np.array([440.0, 494.0])))
-    monkeypatch.setattr(metrics, "_f0", lambda y, sr: (np.full(400, 440.0), np.ones(400, bool)))
+    monkeypatch.setattr(metrics, "_f0", lambda y, sr, **kwargs: (np.full(400, 440.0), np.ones(400, bool)))
 
 
 def test_identical_parts_are_perfect():
@@ -85,6 +85,31 @@ def test_flat_rms_env_corr_is_none_not_nan():
     m = metrics.slice_metrics(flat, flat, Slice("song", "song", 0.0, 4.0), "other")
     assert m["env_corr"] is None
     assert all(v is None or np.isfinite(v) for v in m.values())
+
+
+def test_logspec_db_ignores_a_pure_level_difference():
+    # a signal with energy in several bands (not just one), so the fix's
+    # "normalise by the mean over live bands only" actually gets exercised.
+    t = np.arange(int(4.0 * SR)) / SR
+    y = (0.3 * np.sin(2 * np.pi * 220 * t) + 0.15 * np.sin(2 * np.pi * 880 * t)
+         + 0.075 * np.sin(2 * np.pi * 3300 * t)).astype(np.float32)
+    est_y = (y * 10 ** (-9.5 / 20)).astype(np.float32)   # same shape, -9.5 dB
+    ref = metrics.Features.of(y, SR, pitched=False, f0=False)
+    est = metrics.Features.of(est_y, SR, pitched=False, f0=False)
+    m = metrics.slice_metrics(ref, est, Slice("song", "song", 0.0, 4.0), "other")
+    assert m["logspec_db"] == pytest.approx(0.0, abs=0.05)
+
+
+def test_features_of_passes_f0_fmin_through_to_f0(monkeypatch):
+    calls = []
+
+    def fake_f0(y, sr, **kwargs):
+        calls.append(kwargs.get("fmin"))
+        return np.full(400, 440.0), np.ones(400, bool)
+
+    monkeypatch.setattr(metrics, "_f0", fake_f0)
+    metrics.Features.of(tone(440, 4.0), SR, pitched=False, f0=True, f0_fmin=30.0)
+    assert calls == [30.0]
 
 
 def test_onset_f1_uses_a_narrower_window_than_compare_onset_f1():
