@@ -46,7 +46,7 @@ Each card plays through a transport instead of two plain players:
 - **Parts:** one toggle per part (Vocals, Backing vocals, Keys, Guitar, Bass, Drums, Other / synths, Residual), listing only the parts the song has.
 - **Original ⇄ Rebuild switch:** it keeps the playback position, so the same moment can be compared part by part.
 - **Where the parts come from:**
-  - Original: the separated stems, scaled back by 1/HEADROOM, with silent stems left out.
+  - Original: the separated stems as written by `separate` (which already undoes its input headroom, so the stems sum back to the original), with silent stems left out.
   - Rebuild: each part rendered on its own through the same mix, so the parts sum to the full rebuild.
 - **Missing parts:** a part missing on one side shows disabled ("not in the rebuild"). That's honest about what the code doesn't carry yet, e.g. backing vocals or the residual.
 - **How it plays:** Web Audio, with every part started together and a gain per part; nothing else is added. The site grows to about 25–30 MB.
