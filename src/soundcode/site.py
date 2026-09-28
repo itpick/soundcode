@@ -4,7 +4,13 @@ Only NIN's *The Slip* clips (CC BY-NC-SA 3.0) may appear; River stays private.""
 
 from __future__ import annotations
 
+import datetime as _dt
 import gzip
+import json
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 SONGS = [
@@ -70,3 +76,78 @@ def summary(doc) -> dict:
     tv = doc.stream("text.vox")
     words = sum(len(e.text.split()) for e in (tv.events if tv else []) if e.text)
     return {"tempo": tempo, "instruments": sorted(inst), "words": words, "duration": doc.duration}
+
+
+CREDIT = "Nine Inch Nails — The Slip (2008), CC BY-NC-SA 3.0"
+LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/3.0/"
+
+
+def _frames(path: Path) -> int:
+    import soundfile as sf
+    try:
+        return sf.info(str(path)).frames
+    except Exception:                                   # noqa: BLE001 — mp3 without libsndfile support
+        import librosa
+        return int(round(librosa.get_duration(path=str(path)) * 44100))
+
+
+def _stale(out: Path, src: Path, force: bool) -> bool:
+    return force or not out.exists() or out.stat().st_mtime < src.stat().st_mtime
+
+
+def _check(proc, slug: str, what: str):
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or [str(proc.returncode)]
+        raise RuntimeError(f"{slug}: {what} failed ({tail[0]})")
+
+
+def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict) -> dict:
+    from .parser import parse_file
+    doc = parse_file(str(sc_path))
+    raw, gz = sc_sizes(sc_path.read_text())
+    sizes = {"wav": wav_bytes(_frames(clip)), "mp3": clip.stat().st_size, "sc": raw, "sc_gz": gz,
+             "kit": kit_bytes(doc), "voice": voice_bytes(doc, singer)}
+    w = sizes["wav"]
+    ratios = {"mp3": round(w / sizes["mp3"]), "sc": round(w / raw), "sc_gz": round(w / gz),
+              "with_borrowed": round(w / (gz + sizes["kit"] + sizes["voice"]))}
+    return {"slug": song["slug"], "title": song["title"], "artist": ARTIST, **media,
+            "sizes": sizes, "ratios": ratios, "singer": singer, "summary": summary(doc)}
+
+
+def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: bool = False,
+          songs: list[dict] = SONGS) -> dict:
+    root, site_dir, work = Path(root), Path(site_dir), Path(work)
+    media = site_dir / "media"
+    media.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, "SOUNDCODE_SEEDVC_HOST": os.environ.get("SOUNDCODE_SEEDVC_HOST", "framepick")}
+    cli = [sys.executable, "-m", "soundcode.cli"]
+    entries = []
+    for song in songs:
+        slug, clip = song["slug"], root / song["clip"]
+        sc, wav, log = work / f"{slug}.sc", work / f"{slug}.wav", work / f"{slug}.render.log"
+        if _stale(sc, clip, force):
+            _check(run([*cli, "encode", str(clip), "--title", song["title"], "--artist", ARTIST, "-o", str(sc)],
+                       capture_output=True, text=True, env=env, cwd=root), slug, "encode")
+        if _stale(wav, sc, force):
+            proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav)],
+                       capture_output=True, text=True, env=env, cwd=root)
+            _check(proc, slug, "render")
+            log.write_text(proc.stderr or "")
+        from .parser import parse_file
+        singer = singer_from_log(log.read_text() if log.exists() else "", parse_file(str(sc)))
+        names = {"original": f"media/{slug}-original.mp3", "rebuild": f"media/{slug}-rebuild.mp3",
+                 "sc": f"media/{slug}.sc"}
+        shutil.copyfile(clip, site_dir / names["original"])
+        shutil.copyfile(sc, site_dir / names["sc"])
+        _check(run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "192k",
+                    str(site_dir / names["rebuild"])], capture_output=True, text=True), slug, "mp3")
+        entries.append(song_entry(song, sc, clip, singer, names))
+    tot = {k: sum(e["sizes"][k] for e in entries) for k in ("wav", "mp3", "sc", "sc_gz")}
+    tot["borrowed"] = sum(e["sizes"]["kit"] + e["sizes"]["voice"] for e in entries)
+    data = {"built": _dt.date.today().isoformat(), "credit": CREDIT, "license_url": LICENSE_URL,
+            "songs": entries, "totals": tot}
+    tmp = site_dir / "data.json.part"
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(site_dir / "data.json")                 # atomic: a failed build keeps the old page data
+    return data

@@ -85,3 +85,62 @@ def test_summary():
     assert s["instruments"] == ["drums", "keys.piano", "voice.lead"]
     assert s["words"] == 5              # "a", "<b>", "&", "c", "river"
     assert s["duration"] == 4.0
+
+
+def _fake_run(root):
+    """Stands in for the CLI and ffmpeg: writes the files each call would produce."""
+    import subprocess
+    calls = []
+
+    def run(cmd, **k):
+        calls.append(cmd)
+        out = Path(cmd[cmd.index("-o") + 1]) if "-o" in cmd else Path(cmd[-1])
+        if "encode" in cmd:
+            out.write_text(SC)
+        elif "render" in cmd:
+            out.write_bytes(b"RIFF")
+            return subprocess.CompletedProcess(cmd, 0, "", "with-vocals: SoulX-Singer failed (x); sung with DiffSinger + Seed-VC")
+        else:                                            # ffmpeg ... <out.mp3>
+            out.write_bytes(b"ID3" + b"\0" * 997)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    return run, calls
+
+
+def test_build_writes_data_and_media(tmp_path, monkeypatch):
+    import json
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+    run, calls = _fake_run(root)
+    data = site.build(root, root / "site", root / "work", run=run, songs=[song])
+    on_disk = json.loads((root / "site" / "data.json").read_text())
+    assert on_disk == data
+    s = data["songs"][0]
+    assert s["sizes"]["wav"] == 44100 * 30 * 4 + 44 and s["sizes"]["mp3"] == 480_000
+    assert s["sizes"]["sc"] == len(SC.encode()) and s["singer"] == "diffsinger"
+    assert s["ratios"]["sc_gz"] == round(s["sizes"]["wav"] / s["sizes"]["sc_gz"])
+    for f in (s["original"], s["rebuild"], s["sc"]):
+        assert (root / "site" / f).exists()
+    assert "CC BY-NC-SA 3.0" in data["credit"]
+
+    n = len(calls)
+    site.build(root, root / "site", root / "work", run=run, songs=[song])   # cached: no re-encode/render
+    assert not any("encode" in c or "render" in c for c in calls[n:])
+
+
+def test_a_failed_song_names_itself_and_keeps_the_old_data(tmp_path, monkeypatch):
+    import subprocess
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x")
+    (root / "site").mkdir()
+    (root / "site" / "data.json").write_text('{"old": true}')
+
+    def run(cmd, **k):
+        return subprocess.CompletedProcess(cmd, 1, "", "boom")
+    with pytest.raises(RuntimeError, match="discipline-30s"):
+        site.build(root, root / "site", root / "work", run=run, songs=[song])
+    assert (root / "site" / "data.json").read_text() == '{"old": true}'
