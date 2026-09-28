@@ -29,7 +29,7 @@ The page uses only the four Nine Inch Nails clips from *The Slip* (2008): Discip
 
   The card shows a second, honest ratio: WAV ÷ (gzipped `.sc` + borrowed audio).
 - **The code.** A `<details>` block with the full `.sc` text, monospace and scrollable, plus a download link.
-- **What's in it.** Tempo, key, the instrument list (from `:instruments`/`inst=`), and the word count of `:text.vox`.
+- **What's in it.** Tempo, the instrument list (from `:instruments`/`inst=`), and the word count of `:text.vox`.
 
 **Footer**
 - The CC credit and license link.
@@ -58,7 +58,7 @@ For each song:
    - `kit_bytes` is the sum of the kit folder's files.
    - `voice_bytes = PROMPT_S × 24000 × 2`, taken from `soulx.PROMPT_S`/`soulx.SR`, but only when the `.sc` has sung words in `:text.vox`; otherwise 0.
    - Ratios are rounded to whole numbers.
-   - Summary fields come from the `.sc` via the parser: tempo, key, instruments, words.
+   - Summary fields come from the `.sc` via the parser: tempo, instruments, words. The key is not in the `.sc` (the encoder only logs it), so the page leaves it out.
 4. Write `site/data.json`: the songs, their sizes and ratios, the totals and the build date.
 
 `index.html` fetches `data.json` and renders the cards. The measurement lives in one place, the script, and the page only displays it.
