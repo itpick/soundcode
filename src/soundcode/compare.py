@@ -232,13 +232,11 @@ def sung_wer(doc, wav, words=None) -> float | None:
         return wer(ref, heard_words(words))
     from faster_whisper import WhisperModel
 
-    from .lyrics import normalise
     from .lyrics import asr_download_root
     segs, _ = WhisperModel("small", device="cpu", compute_type="int8",
                            download_root=asr_download_root()).transcribe(
         str(wav), language="en")
-    heard = [w for s in segs for w in (normalise(x) for x in s.text.replace("-", " ").split()) if w]
-    return wer(ref, heard)
+    return wer(ref, heard_words(s.text for s in segs))
 
 
 def blocks_from_grid(doc, duration: float) -> list[tuple[float, float]]:

@@ -17,18 +17,19 @@ from soundcode import compare  # noqa: E402
 from soundcode.score import drums, embed, metrics, report, scorer  # noqa: E402
 
 SR = 44100
-DUR = 12.0
+DUR = 40.0
 N = int(SR * DUR)
 
-# 120 bpm 4/4: a bar is 2 s, so three 2-bar sections cover the 12 s song
-SC = ("%sc 0.3\n@duration 12.0\n\n:grid\nmeter @0.000 4/4\nanchor bar 1 @0.000\n"
-      "tempo @0.000 120\n\n:struct\nintro 1-2 inst energy=0.2\n"
-      "verse 3-4 inst energy=0.5\nchorus 5-6 inst energy=0.8\n")
+# 120 bpm 4/4: a bar is 2 s, so the three sections are 0-12, 12-26, 26-40 s;
+# 40 s gives three 20 s windows (0:00, 0:10, 0:20)
+SC = ("%sc 0.3\n@duration 40.0\n\n:grid\nmeter @0.000 4/4\nanchor bar 1 @0.000\n"
+      "tempo @0.000 120\n\n:struct\nintro 1-6 inst energy=0.2\n"
+      "verse 7-13 inst energy=0.5\nchorus 14-20 inst energy=0.8\n")
 
 _rng = np.random.default_rng(7)
 # irregular onset times so the lag search has one clear peak
-PIANO_T = np.sort(_rng.uniform(0.2, DUR - 0.8, 24))
-DRUM_T = np.sort(_rng.uniform(0.2, DUR - 0.5, 30))
+PIANO_T = np.sort(_rng.uniform(0.2, DUR - 0.8, 80))
+DRUM_T = np.sort(_rng.uniform(0.2, DUR - 0.5, 100))
 
 
 def _piano(shift=0.0, gain=1.0):
@@ -113,7 +114,9 @@ def test_score_song_flags_a_late_quiet_part_and_writes_the_report(tmp_path, fake
 
     piano, dr = res["parts"]["piano"], res["parts"]["drums"]
     assert dr["song"]["score"] > 90
-    assert res["drift"]["piano"] and all(w["drift"] for w in res["drift"]["piano"])
+    assert len(res["drift"]["piano"]) == 3
+    assert all(w["drift"] for w in res["drift"]["piano"])
+    assert all(w["lag_ms"] == pytest.approx(200, abs=15) for w in res["drift"]["piano"])
     assert not any(w["drift"] for w in res["drift"]["drums"])
     assert piano["song"]["axes"]["what"] <= dr["song"]["axes"]["what"] - 30
     assert [s["label"] for s in piano["sections"]] == ["intro", "verse", "chorus"]
@@ -133,7 +136,7 @@ def test_score_song_flags_a_late_quiet_part_and_writes_the_report(tmp_path, fake
         for side in ("original", "rebuild"):
             ex = tmp_path / "out" / "excerpts" / f"{n}-{side}.wav"
             assert ex.exists()
-            assert sf.info(str(ex)).duration == pytest.approx(DUR, abs=0.05)  # clamped to the file
+            assert sf.info(str(ex)).duration == pytest.approx(15.0, abs=0.05)
             assert f"excerpts/{n}-{side}.wav" in text
 
 
@@ -163,11 +166,11 @@ def test_vocal_part_words_are_transcribed_once_per_file(tmp_path, fakes, monkeyp
     def fake_words(wav):
         calls.append(Path(wav))
         if Path(wav).parent.name == "stems":
-            return [(" Walk", 1.0, 1.3), (" down", 5.0, 5.3), (" town,", 9.0, 9.3)]
-        return [("walk", 1.1, 1.4), ("down", 5.1, 5.4)]
+            return [(" Walk", 1.0, 1.3), (" down", 14.0, 14.3), (" town,", 30.0, 30.3)]
+        return [("walk", 1.1, 1.4), ("down", 14.1, 14.4)]
     monkeypatch.setattr(scorer, "_words", fake_words)
 
-    sc = SC + '\n:text.vox\n@1.0 "walk" | @5.0 "down" | @9.0 "town"\n'
+    sc = SC + '\n:text.vox\n@1.0 "walk" | @14.0 "down" | @30.0 "town"\n'
     vox = _piano()
     res = _song(tmp_path, {"lead_vocals": vox}, {"lead_vocals": vox}, sc=sc)
     lv = res["parts"]["lead_vocals"]
@@ -191,13 +194,49 @@ def test_sung_wer_accepts_precomputed_words():
 
 
 def test_repeated_section_labels_keep_their_own_spans(tmp_path, fakes):
-    sc = SC.replace("chorus 5-6", "verse 5-6")
+    sc = SC.replace("chorus 14-20", "verse 14-20")
     res = _song(tmp_path, {"piano": _piano()}, {"piano": _piano(shift=0.2, gain=0.5)}, sc=sc)
     p = res["parts"]["piano"]
-    assert [(s["label"], s["a"]) for s in p["sections"]] == [("intro", 0.0), ("verse", 4.0),
-                                                             ("verse", 8.0)]
+    assert [(s["label"], s["a"]) for s in p["sections"]] == [("intro", 0.0), ("verse", 12.0),
+                                                             ("verse", 26.0)]
     w = p["worst"]
     match = [s for s in p["sections"] if (s["a"], s["b"]) == (w["a"], w["b"])]
     assert match and match[0]["score"] == w["score"] and match[0]["label"] == w["label"]
     text = Path(report.html(res, tmp_path / "out")).read_text()
     assert text.count("title='piano · verse'") == 2
+
+
+def test_truncated_rebuild_is_missing_not_silent_where_it_stops(tmp_path, fakes):
+    full = _song(tmp_path / "a", {"piano": _piano()}, {"piano": _piano()})
+    cut = _piano()
+    cut[int(20 * SR):] = 0.0                         # the rebuild stops at 0:20 ...
+    short = cut[: int(20 * SR)]                      # ... and the file is only 20 s long
+    res = _song(tmp_path / "b", {"piano": _piano()}, {"piano": short})
+    p = res["parts"]["piano"]
+    chorus = p["sections"][2]
+    assert chorus["label"] == "chorus" and chorus["missing"] and not chorus["silent"]
+    assert chorus["score"] == 0.0
+    assert p["song"]["missing_share"] == pytest.approx(14 / 40)
+    assert p["song"]["score"] <= full["parts"]["piano"]["song"]["score"] - 30
+    assert res["score"] <= full["score"] - 20
+    assert p["worst"]["label"] == "chorus" and p["worst"]["score"] == 0.0
+    win = {w["label"]: w for w in res["drift"]["piano"]}
+    assert win["0:20"]["missing"] and win["0:20"]["lag_ms"] is None and not win["0:20"]["drift"]
+    assert p["song"]["raw"]["missing_windows"] == ["0:20"]
+    assert "gap" in Path(report.html(res, tmp_path / "b" / "out")).read_text()
+
+
+def test_section_dropout_scores_zero_and_leaves_the_others_alone(tmp_path, fakes):
+    hole = _piano()
+    hole[int(12 * SR):int(26 * SR)] = 0.0            # the verse dropped out of the rebuild
+    res = _song(tmp_path, {"piano": _piano()}, {"piano": hole})
+    intro, verse, chorus = res["parts"]["piano"]["sections"]
+    assert verse["missing"] and verse["score"] == 0.0 and verse["axes"]["sound"] is None
+    assert intro["score"] > 90 and chorus["score"] > 90
+    assert not intro["missing"] and not chorus["missing"]
+    assert res["parts"]["piano"]["song"]["missing_share"] == pytest.approx(14 / 40)
+
+
+def test_json_default_turns_numpy_nan_into_null(tmp_path):
+    assert json.loads(json.dumps({"x": np.float32("nan"), "y": np.float32(1.5)},
+                                 default=scorer._json_default)) == {"x": None, "y": 1.5}

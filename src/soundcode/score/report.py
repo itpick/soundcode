@@ -101,7 +101,10 @@ def _heatmap(result: dict) -> str:
             out = []
             for i, lb in enumerate(labels):
                 s = res["sections"][i] if i < len(res["sections"]) else None
-                if s is None or s["score"] is None:
+                if s is not None and s.get("missing"):
+                    out.append(f"<td style='background:{_color(0)}' "
+                               f"title='{_e(key)} · {_e(lb)} · not rebuilt here'>0 gap</td>")
+                elif s is None or s["score"] is None:
                     out.append("<td class=na>·</td>")
                 else:
                     out.append(f"<td style='background:{_color(s['score'])}' "

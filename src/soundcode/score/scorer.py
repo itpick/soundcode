@@ -234,10 +234,14 @@ def _load_stereo(path: Path, sr: int):
     return y.astype(np.float32)
 
 
-def _trim(a, b):
-    """Unequal lengths: compare only the span both files cover."""
-    n = min(a.shape[-1], b.shape[-1])
-    return a[..., :n], b[..., :n]
+def _fit(y, n: int):
+    """Unequal lengths: the original sets the length. A shorter side is
+    zero-padded (a rebuild that stops early is silent there, and scored as
+    such), a longer one is cut at the original's end."""
+    if y.shape[-1] >= n:
+        return y[..., :n]
+    pad = [(0, 0)] * (y.ndim - 1) + [(0, n - y.shape[-1])]
+    return np.pad(y, pad)
 
 
 def _abs(v):
@@ -319,19 +323,49 @@ def _seg(y, sr, a, b):
     return y[..., max(int(a * sr), 0):max(int(b * sr), 0)]
 
 
-def _slice_entries(scored: list[dict], slcs, raws, silent_flags) -> list[dict]:
-    return [{**e, "a": s.a, "b": s.b, "silent": sil, "raw": raw}
-            for e, s, raw, sil in zip(scored, slcs, raws, silent_flags)]
+def _slice_entries(scored: list[dict], slcs, raws, states) -> list[dict]:
+    """Annotate `score_part`'s slice entries with span, state flags and raw
+    metrics. A `missing` slice (original active, rebuild below the gate
+    there) scores 0: the section-level form of "missing active part -> 0"."""
+    out = []
+    for e, s, raw, st in zip(scored, slcs, raws, states):
+        e = {**e, "a": s.a, "b": s.b, "silent": st == "silent", "missing": st == "missing",
+             "raw": raw}
+        if st == "missing":
+            e["axes"] = {axis: None for axis in AXES}
+            e["score"] = 0.0
+            e["metrics"] = {}
+        out.append(e)
+    return out
 
 
-def _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, quiet) -> dict:
+def _missing_share(secs, sec_states) -> float:
+    """Share of the original's active section time where the rebuild is missing."""
+    active = sum(s.b - s.a for s, st in zip(secs, sec_states) if st != "silent")
+    missing = sum(s.b - s.a for s, st in zip(secs, sec_states) if st == "missing")
+    return missing / active if active > 0 else 0.0
+
+
+def _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, states) -> dict:
     """`score_part` on the flat metric dicts, then annotate every slice entry
-    with its time span, its silent flag and every raw metric (anchored or not)."""
+    with its time span, its state flags and every raw metric (anchored or not).
+
+    Missing sections pull the song down in proportion to their time: the
+    song's axes and score are the whole-song metrics' ones scaled by the
+    share of the original's active time the rebuild covers
+    (`score_present` keeps the unscaled score)."""
     res = score_part(song_m, [(s.label, m) for s, m in zip(secs, sec_ms)],
                      [(s.label, m) for s, m in zip(wins, win_ms)], part_type)
-    res["song"] = {**res["song"], "a": song_s.a, "b": song_s.b, "silent": False, "raw": song_m}
-    res["sections"] = _slice_entries(res["sections"], secs, sec_ms, quiet["sections"])
-    res["windows"] = _slice_entries(res["windows"], wins, win_ms, quiet["windows"])
+    share = _missing_share(secs, states["sections"])
+    song = {**res["song"], "a": song_s.a, "b": song_s.b, "silent": False, "missing": False,
+            "raw": song_m, "score_present": res["song"]["score"], "missing_share": share}
+    if share > 0:
+        keep = 1.0 - share
+        song["axes"] = {k: (None if v is None else v * keep) for k, v in song["axes"].items()}
+        song["score"] = None if song["score"] is None else song["score"] * keep
+    res["song"] = song
+    res["sections"] = _slice_entries(res["sections"], secs, sec_ms, states["sections"])
+    res["windows"] = _slice_entries(res["windows"], wins, win_ms, states["windows"])
     # re-pick the worst section from the annotated entries (same rule as
     # score_part: first lowest wins) so it carries its own span even when two
     # sections share a label (e.g. two "verse"s)
@@ -342,24 +376,40 @@ def _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, quiet) -> d
     return res
 
 
-def _lags(y_ref, y_est, sr, secs, wins, quiet):
-    """Per-window drift, per-section lag, and the song lag (mean |lag| over
-    the windows where the original is active): the whole-song
-    cross-correlation of a part that drifts progressively has no one lag."""
+def _lags(y_ref, y_est, sr, secs, wins, states):
+    """Per-window drift, per-section lag, and the song lag.
+
+    The song lag is the mean |lag| over the windows where both sides are
+    active: the whole-song cross-correlation of a part that drifts
+    progressively has no one lag. A window where the original is active but
+    the rebuild isn't is flagged `missing` in its drift entry (lag unknown,
+    None, never "in sync"), and listed in `missing_windows` rather than
+    silently dropped."""
     from . import align
 
     dr = align.drift(y_ref, y_est, sr, list(wins) + list(secs))
     win_dr, sec_dr = dr[:len(wins)], dr[len(wins):]
-    song_lag = _mean(abs(d["lag_ms"]) for d, q in zip(win_dr, quiet["windows"])
-                     if not q and d["lag_ms"] is not None)
-    return win_dr, [d["lag_ms"] for d in sec_dr], song_lag
+    for d, st in zip(win_dr, states["windows"]):
+        d["missing"] = st == "missing"
+        if st == "missing":
+            d["lag_ms"], d["drift"] = None, False
+    song_lag = _mean(abs(d["lag_ms"]) for d, st in zip(win_dr, states["windows"])
+                     if st == "ok" and d["lag_ms"] is not None)
+    missing_windows = [d["label"] for d in win_dr if d["missing"]]
+    return win_dr, [d["lag_ms"] for d in sec_dr], song_lag, missing_windows
 
 
-def _quiet(y_ref, sr, secs, wins) -> dict:
-    """Per section / window: True where the original is below the gate (not scored)."""
+def _states(y_ref, y_est, sr, secs, wins) -> dict:
+    """Per section / window: "silent" where the original is below the gate
+    (not scored), "missing" where the original is active but the rebuild
+    isn't (scored 0), else "ok". Decided on the full-length original."""
     from . import slices
-    return {"sections": [not slices.active(y_ref, sr, s.a, s.b) for s in secs],
-            "windows": [not slices.active(y_ref, sr, s.a, s.b) for s in wins]}
+
+    def state(s):
+        if not slices.active(y_ref, sr, s.a, s.b):
+            return "silent"
+        return "ok" if slices.active(y_est, sr, s.a, s.b) else "missing"
+    return {"sections": [state(s) for s in secs], "windows": [state(s) for s in wins]}
 
 
 def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, doc, song_s,
@@ -372,15 +422,15 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
 
     part_type = PART_TYPE[key]
     sr = metrics.SR
-    y_ref, y_est = _trim(y_ref, y_est)
+    y_est = _fit(y_est, y_ref.shape[-1])
     pitched, f0 = key in metrics.NOTE_F1_PARTS, key in metrics.F0_PARTS
     fmin = BASS_F0_FMIN if key == "bass" else 50.0
     f_ref = metrics.Features.of(y_ref, sr, pitched, f0, f0_fmin=fmin)
     f_est = metrics.Features.of(y_est, sr, pitched, f0, f0_fmin=fmin)
     fr_ref, fr_est = embed.frames(ref_path), embed.frames(est_path)
 
-    quiet = _quiet(y_ref, sr, secs, wins)
-    win_dr, sec_lags, song_lag = _lags(y_ref, y_est, sr, secs, wins, quiet)
+    states = _states(y_ref, y_est, sr, secs, wins)
+    win_dr, sec_lags, song_lag, missing_windows = _lags(y_ref, y_est, sr, secs, wins, states)
 
     vo_ref = vo_est = None
     if key == "drums":
@@ -407,9 +457,12 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
             m["word_mae_s"] = _word_mae(pairs, s.a, s.b)
         return m
 
-    sec_ms = [{} if sil else one(s, lag) for s, lag, sil in zip(secs, sec_lags, quiet["sections"])]
-    win_ms = [{} if sil else one(s, d["lag_ms"]) for s, d, sil in zip(wins, win_dr, quiet["windows"])]
+    sec_ms = [one(s, lag) if st == "ok" else {}
+              for s, lag, st in zip(secs, sec_lags, states["sections"])]
+    win_ms = [one(s, d["lag_ms"]) if st == "ok" else {}
+              for s, d, st in zip(wins, win_dr, states["windows"])]
     song_m = one(song_s, song_lag)
+    song_m["missing_windows"] = missing_windows
     if key in VOCAL_PARTS:
         song_m["voice_sim"] = compare.voice_similarity(f_ref.y, f_est.y, sr)
         ws_est = compare.sung_wer(doc, est_path, words=w_est)
@@ -418,7 +471,7 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
         song_m["sung_wer_excess"] = (max(0.0, ws_est - ws_ref)
                                      if ws_est is not None and ws_ref is not None else None)
 
-    res = _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, quiet)
+    res = _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, states)
     return res, win_dr
 
 
@@ -431,19 +484,21 @@ def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[d
     from . import embed, metrics, slices
 
     sr = metrics.SR
-    y_ref, y_est = _trim(_load_mono(original), _load_mono(rebuild_mix))
+    y_ref = _load_mono(original)
+    y_est = _fit(_load_mono(rebuild_mix), y_ref.shape[-1])
     if not slices.active(y_ref, sr, song_s.a, song_s.b):
         return score_part({}, [], [], "mix", silent=True), []
     if not slices.active(y_est, sr, song_s.a, song_s.b):
         return score_part({}, [], [], "mix", missing=True), []
 
     st_sr = sf.info(str(original)).samplerate
-    st_ref, st_est = _trim(_load_stereo(original, st_sr), _load_stereo(rebuild_mix, st_sr))
+    st_ref = _load_stereo(original, st_sr)
+    st_est = _fit(_load_stereo(rebuild_mix, st_sr), st_ref.shape[-1])
     f_ref = metrics.Features.of(y_ref, sr, False, False)
     f_est = metrics.Features.of(y_est, sr, False, False)
     fr_ref, fr_est = embed.frames(original), embed.frames(rebuild_mix)
-    quiet = _quiet(y_ref, sr, secs, wins)
-    win_dr, sec_lags, song_lag = _lags(y_ref, y_est, sr, secs, wins, quiet)
+    states = _states(y_ref, y_est, sr, secs, wins)
+    win_dr, sec_lags, song_lag, missing_windows = _lags(y_ref, y_est, sr, secs, wins, states)
 
     def one(s, lag):
         m = metrics.slice_metrics(f_ref, f_est, s, "mix")
@@ -459,15 +514,19 @@ def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[d
         m["width_diff"] = abs(wr - we) if wr is not None and we is not None else None
         return m
 
-    sec_ms = [{} if sil else one(s, lag) for s, lag, sil in zip(secs, sec_lags, quiet["sections"])]
-    win_ms = [{} if sil else one(s, d["lag_ms"]) for s, d, sil in zip(wins, win_dr, quiet["windows"])]
+    sec_ms = [one(s, lag) if st == "ok" else {}
+              for s, lag, st in zip(secs, sec_lags, states["sections"])]
+    win_ms = [one(s, d["lag_ms"]) if st == "ok" else {}
+              for s, d, st in zip(wins, win_dr, states["windows"])]
     song_m = one(song_s, song_lag)
-    return _assemble("mix", song_s, secs, wins, song_m, sec_ms, win_ms, quiet), win_dr
+    song_m["missing_windows"] = missing_windows
+    return _assemble("mix", song_s, secs, wins, song_m, sec_ms, win_ms, states), win_dr
 
 
 def _json_default(o):
     if isinstance(o, np.generic):
-        return o.item()
+        v = o.item()
+        return None if isinstance(v, float) and not np.isfinite(v) else v
     if isinstance(o, np.ndarray):
         return o.tolist()
     raise TypeError(f"not JSON serialisable: {type(o)}")
@@ -484,7 +543,12 @@ def score_song(original: Path, stems_dir: Path, sc: Path, parts_dir: Path,
     - A part whose original is below the gate for the whole song (or has no
       stem) is `silent`; an active original whose rebuilt part is absent or
       silent is `missing` (score 0, flagged).
-    - Unequal lengths are trimmed to the span both files cover.
+    - Unequal lengths: the original sets the length; a shorter rebuild is
+      zero-padded (and a longer one cut), so a rebuild that stops early is
+      scored as missing there, never excused as silent.
+    - A section or window where the original is active but the rebuild is
+      below the gate is `missing` and scores 0; the song score is scaled by
+      the share of the original's active section time the rebuild covers.
     - `cache_dir` holds the per-file tsumugi drum-voice cache (default: the
       MERT cache directory, `out/bench/cache`).
 
