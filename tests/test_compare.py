@@ -171,7 +171,7 @@ def _sweep(freq, cents_off=0.0, secs=2.0, sr=16000):
 def test_pitch_error_is_zero_for_the_same_line_and_measures_detune():
     a = _sweep(220.0)
     assert cmp.pitch_error_cents(a, a, 16000) < 5
-    assert 40 < cmp.pitch_error_cents(a, _sweep(220.0, 50.0), 16000) < 60
+    assert 35 < cmp.pitch_error_cents(a, _sweep(220.0, 50.0), 16000) < 65      # crepe bins are 20 c
 
 
 def test_pitch_error_of_silence_is_none():

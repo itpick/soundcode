@@ -275,3 +275,32 @@ def test_f0_extraction_is_deterministic(tmp_path):
     sf.write(str(p), y, sr)
     a, b = ct.extract(p), ct.extract(p)
     np.testing.assert_array_equal(a[1], b[1])
+
+
+# --- vocal level matching (Task 7 finding) -----------------------------------------------------
+
+def test_sung_level_ignores_the_noise_floor():
+    """Seed-VC output has a faint floor in every block; level matching must
+    measure only where the voice is (within 30 dB of its loudest block)."""
+    sr = 44100
+    y = np.full(sr * 8, 10 ** (-80 / 20), np.float32)                 # -80 dB floor everywhere
+    t = np.arange(sr * 2) / sr
+    y[:sr * 2] = 0.3 * np.sin(2 * np.pi * 220 * t)                    # 2 s of singing
+    out = render_sf.match_level(y, sr, -30.0)
+    sung = out[:sr * 2]
+    assert abs(20 * np.log10(np.sqrt(np.mean(sung.astype(np.float64) ** 2))) - (-30.0)) < 0.5
+
+
+def test_compare_level_matches_the_sung_vocal(tmp_path):
+    import soundfile as sf
+    from soundcode import compare as cmp
+    sr = 44100
+    t = np.arange(sr * 2) / sr
+    y = np.full(sr * 4, 1e-4, np.float32)
+    y[:sr * 2] = 0.8 * np.sin(2 * np.pi * 220 * t)
+    wav = tmp_path / "sung.wav"
+    sf.write(str(wav), y, sr)
+    doc = parse(SONG.replace("meta stem=lead_vocals", "meta stem=lead_vocals level=-30.0"))
+    m = cmp.sung_stream(doc, wav, cmp.SR * 4)
+    seg = m[:cmp.SR * 2]
+    assert abs(20 * np.log10(np.sqrt(np.mean(seg.astype(np.float64) ** 2))) - (-30.0)) < 0.5

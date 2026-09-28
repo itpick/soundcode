@@ -135,6 +135,23 @@ def voice_similarity(y_ref, y_est, sr) -> float | None:
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
+def sung_stream(doc, wav, n: int) -> np.ndarray:
+    """The sung vocal at SR, level-matched like the renderer does it."""
+    import librosa
+
+    from .render_sf import match_level
+    from .sing_score import vocal_stream
+
+    y, _ = librosa.load(str(wav), sr=SR, mono=True)
+    s = doc.stream(vocal_stream(doc))
+    level = s.meta.get("level") if s is not None else None
+    if level is not None and np.abs(y).max() > 0:
+        y = match_level(y, SR, float(level.rstrip("dB")))
+    out = np.zeros(n, np.float32)
+    out[:min(n, len(y))] = y[:n]
+    return out
+
+
 def blocks_from_grid(doc, duration: float) -> list[tuple[float, float]]:
     from .expand import build_grid
 
@@ -239,9 +256,7 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
 
             from . import sing
             wav, _ = sing.sing(doc, voice_ref)
-            y, _ = librosa.load(str(wav), sr=SR, mono=True)
-            rend["lead_vocals"] = np.zeros(n, np.float32)
-            rend["lead_vocals"][:min(n, len(y))] = y[:n]
+            rend["lead_vocals"] = sung_stream(doc, wav, n)
             notes_side["sung"] = "lead_vocals row compares the sung vocal (DiffSinger -> Seed-VC)"
     else:
         rs = default_out_dir(sc_or_wav)

@@ -214,6 +214,21 @@ def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
     return mix(doc, streams, sr, with_vocals)
 
 
+VOICE_RANGE_DB = 30.0
+
+
+def match_level(y: np.ndarray, sr: int, level_db: float) -> np.ndarray:
+    """Scale a synthesized part so its RMS over the 2 s blocks where it really
+    sounds (within VOICE_RANGE_DB of its loudest block) equals `level_db`.
+    A vocoder's faint noise floor in every block must not count as singing."""
+    b = max(1, int(LEVEL_BLOCK_S * sr))
+    blocks = [y[i:i + b] for i in range(0, len(y), b)]
+    db = np.array([10 * np.log10(np.mean(x.astype(np.float64) ** 2) + 1e-20) for x in blocks])
+    keep = [x for x, d in zip(blocks, db) if d >= db.max() - VOICE_RANGE_DB]
+    have = 20 * np.log10(np.sqrt(np.mean(np.concatenate(keep).astype(np.float64) ** 2)) + 1e-20)
+    return (y * 10 ** ((level_db - have) / 20)).astype(np.float32)
+
+
 def _load_stream(path: Path, sr: int, n: int, stream) -> np.ndarray:
     import librosa
 
@@ -222,9 +237,9 @@ def _load_stream(path: Path, sr: int, n: int, stream) -> np.ndarray:
     out = np.zeros((n, 2), np.float32)
     out[: len(y), 0] = out[: len(y), 1] = y
     level = stream.meta.get("level") if stream is not None else None
-    have = _rms_db(out, sr)
-    if level is not None and np.isfinite(have):
-        out *= 10 ** ((float(level.rstrip("dB")) - have) / 20)
+    if level is not None and np.abs(out).max() > 0:
+        mono = match_level(out[:, 0], sr, float(level.rstrip("dB")))
+        out[:, 0] = out[:, 1] = mono
     return out
 
 
