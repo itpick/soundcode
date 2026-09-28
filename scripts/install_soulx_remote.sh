@@ -3,11 +3,15 @@
 # ~/infinity-engine/soulx-singer, with its own uv venv (python 3.10) and weights.
 set -e
 HOST=${SOUNDCODE_SOULX_HOST:-${SOUNDCODE_SEEDVC_HOST:-framepick}}
+ROOT=${0:A:h:h}
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" 'mkdir -p ~/infinity-engine'
+scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ROOT/scripts/soulx.patch" "$HOST":infinity-engine/soulx.patch
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" 'bash -s' <<'REMOTE'
 set -e
 mkdir -p ~/infinity-engine && cd ~/infinity-engine
 [ -d soulx-singer/.git ] || git clone -q https://github.com/Soul-AILab/SoulX-Singer.git soulx-singer
 cd soulx-singer
+git apply --check ../soulx.patch 2>/dev/null && git apply ../soulx.patch   # load audio with soundfile
 [ -x .venv/bin/python ] || uv venv -q --python 3.10 .venv
 uv pip install -q --python .venv/bin/python -r requirements.txt
 uv pip install -q --python .venv/bin/python "huggingface_hub[cli]"

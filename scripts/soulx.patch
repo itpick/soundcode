@@ -1,0 +1,15 @@
+diff --git a/soulxsinger/utils/audio_utils.py b/soulxsinger/utils/audio_utils.py
+index bca06ac..001e48a 100644
+--- a/soulxsinger/utils/audio_utils.py
++++ b/soulxsinger/utils/audio_utils.py
+@@ -12,7 +12,9 @@ def load_wav(wav_path: str, sample_rate: int):
+     Returns:
+         torch.Tensor: Waveform tensor with shape (1, T).
+     """
+-    waveform, sr = torchaudio.load(wav_path)
++    import soundfile as _sf  # torchaudio>=2.9 needs torchcodec+FFmpeg; soundfile does not
++    _y, sr = _sf.read(wav_path, dtype="float32", always_2d=True)
++    waveform = torch.from_numpy(_y.T.copy())
+         
+     if sr != sample_rate:
+         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)
