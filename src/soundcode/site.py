@@ -101,13 +101,13 @@ def _check(proc, slug: str, what: str):
         raise RuntimeError(f"{slug}: {what} failed ({tail[0]})")
 
 
-def _parse_file_cached(path: Path):
+def _parse_file(path: Path):
     from .parser import parse_file
     return parse_file(str(path))
 
 
 def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict) -> dict:
-    doc = _parse_file_cached(sc_path)
+    doc = _parse_file(sc_path)
     raw, gz = sc_sizes(sc_path.read_text())
     sizes = {"wav": wav_bytes(_frames(clip)), "mp3": clip.stat().st_size, "sc": raw, "sc_gz": gz,
              "kit": kit_bytes(doc), "voice": voice_bytes(doc, singer)}
@@ -120,6 +120,23 @@ def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media:
 
 def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: bool = False,
           songs: list[dict] = SONGS) -> dict:
+    """Encode, render, and measure audio, writing site/ to mirror exactly the songs passed.
+
+    site/media/ and data.json are replaced together; songs not in the songs parameter
+    disappear from the page. Both are updated atomically: on any failure, both remain
+    unchanged to prevent mismatches between media and metadata.
+
+    Args:
+        root: Project root (contains audio clip paths)
+        site_dir: Output directory for site/media/ and site/data.json
+        work: Working directory for encode/render intermediates
+        run: subprocess.run (for testing: can pass a fake runner)
+        force: Re-encode and re-render all songs, skipping cache
+        songs: List of song dicts with slug, title, clip path (default: SONGS)
+
+    Returns:
+        Data dict with built date, credit, license, song entries, and totals.
+    """
     root, site_dir, work = Path(root), Path(site_dir), Path(work)
     media_staging = site_dir / ".media.part"
     media = site_dir / "media"
@@ -142,7 +159,7 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
                            capture_output=True, text=True, env=env, cwd=root)
                 _check(proc, slug, "render")
                 log.write_text(proc.stderr or "")
-            singer = singer_from_log(log.read_text() if log.exists() else "", _parse_file_cached(sc))
+            singer = singer_from_log(log.read_text() if log.exists() else "", _parse_file(sc))
             names = {"original": f"media/{slug}-original.mp3", "rebuild": f"media/{slug}-rebuild.mp3",
                      "sc": f"media/{slug}.sc"}
             shutil.copyfile(clip, media_staging / f"{slug}-original.mp3")

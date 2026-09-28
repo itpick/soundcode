@@ -188,3 +188,37 @@ def test_partial_failure_preserves_existing_media_and_data(tmp_path, monkeypatch
     assert json.loads((root / "site" / "data.json").read_text()) == old_data
     # Verify no staging directory left behind
     assert not (root / "site" / ".media.part").exists()
+
+
+def test_build_with_subset_replaces_entire_site(tmp_path, monkeypatch):
+    import json
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song1 = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    song2 = {"slug": "lights-30s", "title": "Lights", "clip": "audio/test/lights-30s.mp3"}
+    (root / song1["clip"]).write_bytes(b"x" * 480_000)
+    (root / song2["clip"]).write_bytes(b"y" * 480_000)
+
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+    run, calls = _fake_run(root)
+
+    # First build: both songs
+    data1 = site.build(root, root / "site", root / "work", run=run, songs=[song1, song2])
+    assert len(data1["songs"]) == 2
+    assert (root / "site" / "media" / "discipline-30s-original.mp3").exists()
+    assert (root / "site" / "media" / "lights-30s-original.mp3").exists()
+    on_disk1 = json.loads((root / "site" / "data.json").read_text())
+    assert len(on_disk1["songs"]) == 2
+
+    # Second build: only song1 → song2 disappears from site/
+    data2 = site.build(root, root / "site", root / "work", run=run, songs=[song1])
+    assert len(data2["songs"]) == 1
+    assert data2["songs"][0]["slug"] == "discipline-30s"
+    # song2's media gone
+    assert not (root / "site" / "media" / "lights-30s-original.mp3").exists()
+    # song1's media still there
+    assert (root / "site" / "media" / "discipline-30s-original.mp3").exists()
+    # data.json reflects only song1
+    on_disk2 = json.loads((root / "site" / "data.json").read_text())
+    assert len(on_disk2["songs"]) == 1
+    assert on_disk2["songs"][0]["slug"] == "discipline-30s"
