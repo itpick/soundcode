@@ -137,8 +137,7 @@ def attach_fx(stages: list["Stage"], stem_paths: dict[str, Path], sr: int) -> No
             y, _ = librosa.load(str(path), sr=sr, mono=False)
             y = np.stack([y, y]) if y.ndim == 1 else y
             onsets = librosa.onset.onset_detect(y=y.mean(0), sr=sr, units="time")
-            offsets = [float(b) - 0.01 for b in onsets[1:]]
-            cache[st.stem] = fx.fx_line(fx.measure(y, sr, offsets))
+            cache[st.stem] = fx.fx_line(fx.measure(y, sr, fx.isolated_offsets(onsets)))
         st.lines.insert(0, cache[st.stem])
 
 

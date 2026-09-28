@@ -66,25 +66,34 @@ def measure(stereo: np.ndarray, sr: int, offsets: list[float]) -> Fx:
     el, er = np.mean(l ** 2), np.mean(r ** 2)
     f.pan = float(np.clip((er - el) / (er + el + 1e-20), -1, 1))
     f.crest = float(20 * np.log10(np.abs(mono).max() / (np.sqrt(np.mean(mono.astype(np.float64) ** 2)) + 1e-20)))
-    # room: energy decay after isolated note ends
+    # room: how the energy decays after an isolated note (one followed by space).
+    # Busy passages have no measurable tail; they keep the gentle defaults.
     hop = int(0.01 * sr)
     env = np.array([_rms_db(mono[i:i + hop]) for i in range(0, len(mono) - hop, hop)])
-    slopes, wets = [], []
-    for t in offsets:
-        k = int(t / 0.01)
-        body, tail = env[max(0, k - 10):k], env[k + 5:k + 40]
-        if len(body) < 5 or len(tail) < 20:
+    slopes = []
+    for t0 in offsets:
+        k0 = int(t0 / 0.01)
+        head = env[k0:k0 + 30]
+        if len(head) < 10:
             continue
-        x = np.arange(len(tail)) * 0.01
-        slope = np.polyfit(x, tail, 1)[0]                      # dB per second
-        if slope < -1:
+        start = k0 + int(np.argmax(head)) + 10
+        tail = env[start:start + 100]
+        if len(tail) < 20 or tail.max() < env.max() - 60:
+            continue
+        slope = np.polyfit(np.arange(len(tail)) * 0.01, tail, 1)[0]      # dB per second
+        if slope < -20:
             slopes.append(slope)
-        wets.append(np.mean(tail[:15]) - np.mean(body))
     if slopes:
         f.rt60 = float(np.clip(-60.0 / np.median(slopes), 0.1, 4.0))
-    if wets:
-        f.wet = float(np.clip((np.median(wets) + 30) / 30, 0, 1))
+        f.wet = float(np.clip((f.rt60 - 0.2) / 2, 0.05, 0.35))
     return f
+
+
+def isolated_offsets(onsets: list[float], gap: float = 0.5) -> list[float]:
+    """Onsets of notes followed by at least `gap` seconds before the next one:
+    the only places a room's decay can be heard."""
+    on = sorted(float(t) for t in onsets)
+    return [a for a, b in zip(on, on[1:]) if b - a >= gap]
 
 
 def fx_line(f: Fx) -> str:

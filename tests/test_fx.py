@@ -130,3 +130,31 @@ def test_attach_fx_adds_a_line_to_stem_backed_stages(tmp_path):
     assert other.lines == ["1:1.000  C4  1.000b 90"]
     text = "\n".join(enc._stage_lines(st))
     assert fx.parse_fx(parse("%sc 0.3\n\n" + text).stream("notes.piano")) is not None
+
+
+# --- Task 6 finding: room measured on busy music saturated at rt60 4 s / wet 1.0 -------------
+
+def test_room_on_busy_music_falls_back_to_defaults():
+    """Continuous notes (next onset right after each 'offset') have no tail to
+    measure; the old code read that as maximum reverb."""
+    y = noise(6.0, 7)                                     # never decays
+    f = fx.measure(np.stack([y, y]), SR, offsets=[i * 0.25 for i in range(1, 23)])
+    assert f.rt60 <= 1.0 and f.wet <= 0.3
+
+
+def test_isolated_offsets_keep_only_notes_followed_by_space():
+    onsets = [0.0, 0.25, 0.5, 2.0, 2.2, 5.0]
+    assert fx.isolated_offsets(onsets, gap=0.5) == [0.5, 2.2]      # notes followed by >= 0.5 s of space
+
+
+def test_default_fx_does_not_shift_timing():
+    t = np.arange(SR * 3) / SR
+    y = np.zeros((SR * 3, 2), np.float32)
+    for k in range(6):
+        i = int((0.3 + 0.4 * k) * SR)
+        y[i:i + 2000, :] = (np.hanning(4000)[2000:] * 0.5)[:, None]
+    out = fx.apply(y, SR, fx.Fx(eq=[], rt60=0.3, wet=0.1, width=0.3))
+    env_in, env_out = np.abs(y[:, 0]), np.abs(out[:, 0])
+    import scipy.signal as sg
+    c = sg.correlate(env_out - env_out.mean(), env_in - env_in.mean(), mode="full", method="fft")
+    assert abs(np.argmax(c) - (len(env_in) - 1)) < int(0.01 * SR)
