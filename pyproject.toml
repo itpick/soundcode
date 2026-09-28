@@ -24,6 +24,7 @@ encode = [
     "resemblyzer",
     "setuptools<80",          # webrtcvad (resemblyzer) still imports pkg_resources
     "matplotlib",
+    "pedalboard>=0.9",
 ]
 
 [project.scripts]

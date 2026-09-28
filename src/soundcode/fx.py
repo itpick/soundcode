@@ -1,0 +1,116 @@
+"""Production profile of a stem, and how to put it back on a rendered part.
+
+Measured by the encoder (fx line in each note/perc stream), applied by the
+renderer: tone (31-band EQ curve), room (rt60 + wet), stereo width and pan,
+dynamics (crest). Old files without an fx line render exactly as before.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+BANDS = 20.0 * 2 ** (np.arange(31) / 3)
+_EDGE = 2 ** (1 / 6)
+
+
+@dataclass
+class Fx:
+    eq: list[int] = field(default_factory=list)
+    rt60: float = 0.3
+    wet: float = 0.1
+    width: float = 0.0
+    pan: float = 0.0
+    crest: float = 12.0
+
+
+def band_db(y: np.ndarray, sr: int) -> np.ndarray:
+    y = np.asarray(y, np.float64)
+    if y.ndim == 2:
+        y = y.mean(0)
+    if not y.size or not np.any(y):
+        return np.zeros(len(BANDS))
+    n_fft = 8192
+    frames = [y[i:i + n_fft] for i in range(0, max(1, len(y) - n_fft + 1), n_fft // 2)]
+    win = np.hanning(n_fft)
+    spec = np.mean([np.abs(np.fft.rfft(np.pad(f, (0, n_fft - len(f))) * win)) ** 2
+                    for f in frames], axis=0)
+    freqs = np.fft.rfftfreq(n_fft, 1 / sr)
+    e = np.array([spec[(freqs >= fc / _EDGE) & (freqs < fc * _EDGE)].sum() for fc in BANDS])
+    db = 10 * np.log10(e + 1e-20)
+    ref = db.max()
+    live = db >= ref - 60
+    out = db - db[live].mean()
+    out[~live] = -60.0
+    return out
+
+
+def _rms_db(x: np.ndarray) -> float:
+    return 10 * float(np.log10(np.mean(np.asarray(x, np.float64) ** 2) + 1e-20))
+
+
+def measure(stereo: np.ndarray, sr: int, offsets: list[float]) -> Fx:
+    st = np.asarray(stereo, np.float32)
+    if st.ndim == 1:
+        st = np.stack([st, st])
+    mono = st.mean(0)
+    f = Fx(eq=[int(round(v)) for v in band_db(mono, sr)])
+    if not np.any(mono):
+        return f
+    # stereo image
+    l, r = st[0].astype(np.float64), st[1].astype(np.float64)
+    # width = how different the channels are (a panned mono source is 0 wide)
+    corr = np.sum(l * r) / (np.sqrt(np.sum(l ** 2) * np.sum(r ** 2)) + 1e-20)
+    f.width = float(np.clip(1 - abs(corr), 0, 1))
+    el, er = np.mean(l ** 2), np.mean(r ** 2)
+    f.pan = float(np.clip((er - el) / (er + el + 1e-20), -1, 1))
+    f.crest = float(20 * np.log10(np.abs(mono).max() / (np.sqrt(np.mean(mono.astype(np.float64) ** 2)) + 1e-20)))
+    # room: energy decay after isolated note ends
+    hop = int(0.01 * sr)
+    env = np.array([_rms_db(mono[i:i + hop]) for i in range(0, len(mono) - hop, hop)])
+    slopes, wets = [], []
+    for t in offsets:
+        k = int(t / 0.01)
+        body, tail = env[max(0, k - 10):k], env[k + 5:k + 40]
+        if len(body) < 5 or len(tail) < 20:
+            continue
+        x = np.arange(len(tail)) * 0.01
+        slope = np.polyfit(x, tail, 1)[0]                      # dB per second
+        if slope < -1:
+            slopes.append(slope)
+        wets.append(np.mean(tail[:15]) - np.mean(body))
+    if slopes:
+        f.rt60 = float(np.clip(-60.0 / np.median(slopes), 0.1, 4.0))
+    if wets:
+        f.wet = float(np.clip((np.median(wets) + 30) / 30, 0, 1))
+    return f
+
+
+def fx_line(f: Fx) -> str:
+    eq = ",".join(str(int(v)) for v in f.eq)
+    return (f"fx      eq={eq}  rt60={f.rt60:.2f}s  wet={f.wet:.2f}  width={f.width:.2f}  "
+            f"pan={f.pan:.2f}  crest={f.crest:.1f}dB")
+
+
+def parse_fx(stream) -> Fx | None:
+    if stream is None:
+        return None
+    for name, args in stream.statements:
+        if name != "fx":
+            continue
+        f = Fx()
+        for tok in args:
+            k, _, v = tok.partition("=")
+            try:
+                if k == "eq":
+                    vals = [int(x) for x in v.split(",") if x.strip()]
+                    f.eq = vals if len(vals) == len(BANDS) else []
+                elif k in ("rt60", "crest"):
+                    setattr(f, k, float(v.rstrip("sdB")))
+                elif k in ("wet", "width", "pan"):
+                    setattr(f, k, float(v))
+            except ValueError:
+                continue
+        return f
+    return None

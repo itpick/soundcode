@@ -385,7 +385,7 @@ def apply(stereo: np.ndarray, sr: int, f: Fx) -> np.ndarray:
         y = pb.Pedalboard(boards)(y.T.astype(np.float32), sr).T
     mid, side = (y[:, 0] + y[:, 1]) / 2, (y[:, 0] - y[:, 1]) / 2
     side_now = np.sqrt(np.mean(side ** 2)) / (np.sqrt(np.mean(mid ** 2)) + 1e-12)
-    want = f.width / max(2 - f.width, 1e-3)                        # inverse of measure()'s map
+    want = f.width                                                 # side/mid ~ 1 - |corr|
     side = side * (np.clip(want / side_now, 0, 4) if side_now > 1e-4 else 0.0)
     if side_now <= 1e-4 and f.width > 0.05:                        # mono render: decorrelate
         side = np.roll(mid, int(0.011 * sr)) * np.sqrt(want)
