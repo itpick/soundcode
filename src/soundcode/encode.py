@@ -14,6 +14,7 @@ stream-level estimate from a proxy check.
 from __future__ import annotations
 
 import math
+import shutil
 import sys
 import tempfile
 import warnings
@@ -118,6 +119,29 @@ def needs_fallback(st: "Stage") -> bool:
     return not st.ok and not st.gated
 
 
+def attach_fx(stages: list["Stage"], stem_paths: dict[str, Path], sr: int) -> None:
+    """Put each note/perc stream's production profile (fx line) first in its
+    body, measured on the stem it came from."""
+    import librosa
+
+    from . import fx
+
+    cache: dict[str, str] = {}
+    for st in stages:
+        if not st.ok or not st.stem or not st.name.startswith(("notes.", "perc.")):
+            continue
+        path = stem_paths.get(st.stem)
+        if path is None or not Path(path).exists():
+            continue
+        if st.stem not in cache:
+            y, _ = librosa.load(str(path), sr=sr, mono=False)
+            y = np.stack([y, y]) if y.ndim == 1 else y
+            onsets = librosa.onset.onset_detect(y=y.mean(0), sr=sr, units="time")
+            offsets = [float(b) - 0.01 for b in onsets[1:]]
+            cache[st.stem] = fx.fx_line(fx.measure(y, sr, offsets))
+        st.lines.insert(0, cache[st.stem])
+
+
 def vocal_stem_name(path: Path) -> str:
     """`vocals` when encoder_stems fell back to lead+backing, else the lead stem."""
     return "vocals" if Path(path).stem == "vocals" else "lead_vocals"
@@ -129,6 +153,7 @@ def _stage_lines(st: "Stage") -> list[str]:
     if st.stem:
         level = f"  level={st.level_db:.1f}dB" if st.level_db is not None else ""
         out.append(f"meta    stem={st.stem}{level}")
+    out += [f"meta    {k}={v}" for k, v in st.extra_meta.items()]
     out += [f'meta    warn="{w}"' for w in st.warns]
     return out + st.lines + [""]
 
@@ -158,6 +183,8 @@ class Stage:
     stem: str = ""                # source stem, for the renderer and compare
     gated: bool = False           # silent under the loudness gate: no fallback
     header_fields: dict[str, str] = field(default_factory=dict)   # e.g. inst=
+    extra_meta: dict[str, str] = field(default_factory=dict)     # extra `meta k=v` lines
+    kit_src: Path | None = None                                   # drum one-shots to ship
     level_db: float | None = None  # source stem RMS over its active blocks
 
 
@@ -657,6 +684,14 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
             for t in tracks:
                 st.lines += tsc.note_lines(t, grid)
             st.ok = bool(st.lines)
+            if st.ok:
+                from . import kit as kitmod
+                hits = [(s0, gm.drum_voice(p), v) for t in tracks for s0, _, p, v in t.notes]
+                try:
+                    if kitmod.build(path, hits, work / "kit"):
+                        st.kit_src = work / "kit"
+                except Exception as exc:              # noqa: BLE001 — the kit is optional
+                    st.warns.append(f"drum kit not built: {exc}")
             stages.append(st)
             inventory.lines.append(f"drums    {'drums.kit' if st.ok else 'none'}")
             continue
@@ -897,6 +932,20 @@ def encode(path: str, out_path: str | None = None,
     bpm = grid.get("tempo", 0.0)
     key = _estimate_key(y, sr)
 
+    dest = Path(out_path) if out_path else src.with_suffix(".sc")
+    all_stages = [grid_st, struct_st, harm_st, *ts_stages, contour_st, perc_st, bass_st,
+                  vox_st, guitar_st, piano_st, other_st, text_st, mix_st]
+    _log("production profile (fx) per stem")
+    stem_paths = {**{k: v for k, v in stems.items() if k != "vocals"}, **ts_stems}
+    attach_fx(all_stages, stem_paths, sr)
+    for st in all_stages:
+        if st.kit_src and Path(st.kit_src).is_dir():
+            kit_dir = dest.with_suffix(".kit")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.rmtree(kit_dir, ignore_errors=True)
+            shutil.copytree(st.kit_src, kit_dir)
+            st.extra_meta["kit"] = kit_dir.name
+
     lines: list[str] = [
         "%sc        0.3",
         "%profile   metric-tonal",
@@ -932,8 +981,7 @@ def encode(path: str, out_path: str | None = None,
     if key:
         lines += [":tuning", "ref          A4 = 440.0Hz", "temperament  12tet", ""]
 
-    for st in (grid_st, struct_st, harm_st, *ts_stages, contour_st, perc_st, bass_st, vox_st,
-               guitar_st, piano_st, other_st, text_st, mix_st):
+    for st in all_stages:
         if not st.ok:
             if st.warns:
                 lines.append(f"# :{st.name} omitted — {'; '.join(st.warns)}")
@@ -941,7 +989,6 @@ def encode(path: str, out_path: str | None = None,
         lines += _stage_lines(st)
 
     text = "\n".join(lines) + "\n"
-    dest = Path(out_path) if out_path else src.with_suffix(".sc")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(text, encoding="utf-8")
     _log(f"wrote {dest}  ({len(text)} bytes, tempo {bpm:.1f}, key {key or '?'})")

@@ -112,3 +112,21 @@ def test_render_without_fx_lines_is_unchanged():
     a = render_sf.render_streams(doc, sf2=sf2)
     b = render_sf.render_streams(doc, sf2=sf2, no_fx=True)
     np.testing.assert_array_equal(a["notes.keys"], b["notes.keys"])
+
+
+# --- encoder attaches fx ---------------------------------------------------------------------
+
+def test_attach_fx_adds_a_line_to_stem_backed_stages(tmp_path):
+    import soundfile as sf
+    from soundcode import encode as enc
+    p = tmp_path / "piano.wav"
+    sf.write(str(p), np.stack([noise(seed=5), noise(seed=6)], 1), SR)
+    st = enc.Stage("notes.piano", src="x", ok=True, stem="piano")
+    st.lines = ["1:1.000  C4  1.000b 90"]
+    other = enc.Stage("notes.x", src="x", ok=True)
+    other.lines = ["1:1.000  C4  1.000b 90"]
+    enc.attach_fx([st, other], {"piano": p}, SR)
+    assert st.lines[0].startswith("fx      eq=")
+    assert other.lines == ["1:1.000  C4  1.000b 90"]
+    text = "\n".join(enc._stage_lines(st))
+    assert fx.parse_fx(parse("%sc 0.3\n\n" + text).stream("notes.piano")) is not None
