@@ -39,15 +39,18 @@ def _last_line(proc: subprocess.CompletedProcess) -> str:
 
 def _remote(host: str, src: Path, ref: Path, out: Path, steps: int) -> Path:
     job = f"infinity-engine/jobs/{uuid.uuid4().hex[:10]}"
-    ssh = ["ssh", "-o", "BatchMode=yes", host]
+    ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host]
 
     def run(cmd: list[str], what: str, timeout: int = 600) -> None:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise SingError(f"Seed-VC on {host}: {what} timed out after {timeout}s") from exc
         if proc.returncode != 0:
             raise SingError(f"Seed-VC on {host}: {what} failed ({_last_line(proc)})")
 
-    run([*ssh, f"mkdir -p {job}"], "mkdir")
-    run(["scp", "-q", str(src), str(ref), f"{host}:{job}/"], "upload")
+    scp = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    part = out.with_suffix(".part")
     # NixOS keeps the NVIDIA driver libs outside the default path; harmless elsewhere
     remote = (f"cd {REMOTE_DIR} && LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH "
               f"HF_HUB_CACHE=$PWD/checkpoints/hf_cache "
@@ -55,10 +58,17 @@ def _remote(host: str, src: Path, ref: Path, out: Path, steps: int) -> Path:
               f"--target ~/{job}/{shlex.quote(ref.name)} --output ~/{job}/out "
               f"--diffusion-steps {steps} {_FLAGS} && ls ~/{job}/out/vc_*.wav")
     try:
+        run([*ssh, f"mkdir -p {job}"], "mkdir")
+        run([*scp, str(src), str(ref), f"{host}:{job}/"], "upload")
         run([*ssh, remote], "inference", timeout=1800)
-        run(["scp", "-q", f"{host}:{job}/out/vc_*.wav", str(out)], "download")
+        run([*scp, f"{host}:{job}/out/vc_*.wav", str(part)], "download")
+        part.rename(out)                         # atomic: a cut download never reaches the cache
     finally:
-        subprocess.run([*ssh, f"rm -rf {job}"], capture_output=True, text=True, timeout=120)
+        part.unlink(missing_ok=True)
+        try:
+            subprocess.run([*ssh, f"rm -rf {job}"], capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            pass
     return out
 
 
@@ -74,8 +84,11 @@ def convert(src: Path, ref: Path, out: Path, steps: int = 30) -> Path:
                "--target", str(ref), "--output", tmp, "--diffusion-steps", str(steps),
                *_FLAGS.split()]
         env = {**os.environ, "HF_HUB_CACHE": str(root / "checkpoints" / "hf_cache")}
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, env=env,
-                              timeout=1800)
+        try:
+            proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True, env=env,
+                                  timeout=1800)
+        except subprocess.TimeoutExpired as exc:
+            raise SingError("Seed-VC timed out after 1800s") from exc
         wavs = sorted(Path(tmp).glob("vc_*.wav"))
         if proc.returncode != 0 or not wavs:
             raise SingError(f"Seed-VC failed: {_last_line(proc)}")

@@ -5,7 +5,7 @@ set -e
 ROOT=${0:A:h:h}
 HOST=${SOUNDCODE_SEEDVC_HOST:-framepick}
 ssh -o BatchMode=yes "$HOST" 'mkdir -p ~/infinity-engine' 2>/dev/null
-scp -q "$ROOT/scripts/seedvc.patch" "$HOST":infinity-engine/seedvc.patch 2>/dev/null
+scp -q -o BatchMode=yes -o ConnectTimeout=10 "$ROOT/scripts/seedvc.patch" "$HOST":infinity-engine/seedvc.patch 2>/dev/null
 ssh -o BatchMode=yes "$HOST" 'bash -s' 2>/dev/null <<'REMOTE'
 set -e
 cd ~/infinity-engine

@@ -16,12 +16,21 @@ SR, HOP = 44100, 512
 CONS_S = 0.07
 VOWELS = {"aa", "ae", "ah", "ao", "aw", "ax", "ay", "eh", "er", "ey", "ih", "iy",
           "ow", "oy", "uh", "uw"}
-_LETTER = {"a": "ae", "e": "eh", "i": "ih", "o": "aa", "u": "ah", "y": "iy"}
+# letter-to-ARPAbet guess for words CMUdict lacks; every value is a bank phoneme
+_LETTER = {"a": ["ae"], "b": ["b"], "c": ["k"], "d": ["d"], "e": ["eh"], "f": ["f"],
+           "g": ["g"], "h": ["hh"], "i": ["ih"], "j": ["jh"], "k": ["k"], "l": ["l"],
+           "m": ["m"], "n": ["n"], "o": ["aa"], "p": ["p"], "q": ["k"], "r": ["r"],
+           "s": ["s"], "t": ["t"], "u": ["ah"], "v": ["v"], "w": ["w"], "x": ["k", "s"],
+           "y": ["iy"], "z": ["z"]}
 _cmu = None
 
 
 class SingError(RuntimeError):
     """The .sc cannot be sung; the message says why."""
+
+
+class NoVocalError(SingError):
+    """The .sc has nothing to sing (no vocal stream, or no notes in it)."""
 
 
 @dataclass
@@ -40,7 +49,7 @@ def vocal_stream(doc) -> str:
         if s.fields.get("inst", "").startswith("voice.lead") or \
                 s.meta.get("stem") in ("lead_vocals", "vocals") or s.name == "notes.vox":
             return s.name
-    raise SingError("no lead vocal stream (inst=voice.lead, stem=lead_vocals, or :notes.vox)")
+    raise NoVocalError("no lead vocal stream (inst=voice.lead, stem=lead_vocals, or :notes.vox)")
 
 
 def vocal_notes(doc, stream: str) -> list[tuple[float, float, int]]:
@@ -96,7 +105,7 @@ def g2p(word: str) -> tuple[list[str], bool]:
                 base = "ax"
             out.append("en/" + base)
         return out, True
-    guess = [("en/" + _LETTER[c]) if c in _LETTER else ("en/" + c) for c in word if c.isalpha()]
+    guess = ["en/" + p for c in word if c in _LETTER for p in _LETTER[c]]
     return guess or ["en/ah"], False
 
 
@@ -134,7 +143,7 @@ def _f0(doc, notes, n: int) -> np.ndarray:
     cents = gaussian_filter1d(midi, sigma=2.5) * 100.0
     for start, vals in read_contour(doc):
         seg_t = start + np.arange(len(vals)) * STEP_S
-        inside = (t >= seg_t[0]) & (t <= seg_t[-1] + STEP_S / 2)
+        inside = (t >= seg_t[0]) & (t < seg_t[-1] + STEP_S)     # half-open: no gap to the next line
         cents[inside] = np.interp(t[inside], seg_t, vals)
     return (440.0 * 2 ** ((cents - 6900) / 1200)).astype(np.float32)
 
@@ -147,10 +156,17 @@ def build(doc, duration: float | None = None) -> Score:
     warn: list[str] = []
     ws = words(doc)
     if not notes:
-        raise SingError(f"{stream} has no notes")
+        raise NoVocalError(f"{stream} has no notes")
     if not ws:
         warn.append("no lyrics: singing on 'ah'")
         ws = [(a, b, "ah") for a, b, _ in notes]
+    else:
+        # every note is sung: a note no word covers gets an 'ah'
+        uncovered = [(a, b) for a, b, _ in notes
+                     if not any(w0 - 0.03 <= a < w1 for w0, w1, _ in ws)]
+        if uncovered:
+            warn.append(f"{len(uncovered)} note(s) without words sung on 'ah'")
+            ws = sorted(ws + [(a, b, "ah") for a, b in uncovered])
 
     seq: list[tuple[str, float, float]] = []
     cur = 0.0
