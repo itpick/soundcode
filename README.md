@@ -78,6 +78,13 @@ original singer's voice with Seed-VC. Set `SOUNDCODE_SEEDVC_HOST=framepick` to r
 Seed-VC on a CUDA box (`scripts/install_seedvc_remote.sh`). River: 19 cents pitch
 error, 0.93 voice similarity (`docs/results/2026-09-27-singing-thin-slice.md`).
 
+**Production matching and the song's own drums.** The encoder measures each stem's
+tone (31-band EQ curve), room, stereo width, pan and dynamics into an `fx` line, and
+cuts a drum kit from the drum stem (`<song>.kit/`, referenced by `meta kit=`). The
+renderer applies both (`--no-fx` to compare). Parts now sound far closer to the
+original: spectral difference 6–9 dB → 1–2 dB per part, and drums 0.4–0.9 dB with the kit
+(`docs/results/2026-09-27-production-match.md`).
+
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.
