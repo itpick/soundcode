@@ -101,12 +101,58 @@ def _check(proc, slug: str, what: str):
         raise RuntimeError(f"{slug}: {what} failed ({tail[0]})")
 
 
+# The encoder's -50 dBFS gate: a quieter stem is not a part of the song.
+PART_GATE = 10 ** (-50 / 20)
+# Stems are written with the separator's input gain (separate.HEADROOM) already
+# undone, so stems + residual rebuild the original exactly (checked: max error
+# 2e-7 on discipline-30s). No further gain, or the original parts would play
+# 1/HEADROOM (+1.9 dB) louder than the original.
+ORIGINAL_PART_GAIN = 1.0
+
+
+def _peak(path: Path) -> float:
+    import numpy as np
+    import soundfile as sf
+    y, _ = sf.read(str(path), dtype="float32", always_2d=True)
+    return float(np.abs(y).max()) if y.size else 0.0
+
+
+def _mp3(run, src: Path, out: Path, slug: str, gain: float = 1.0, bitrate: str = "128k"):
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src)]
+    if gain != 1.0:
+        cmd += ["-filter:a", f"volume={gain}"]
+    _check(run([*cmd, "-b:a", bitrate, str(out)], capture_output=True, text=True), slug, "mp3")
+
+
+def export_parts(run, slug: str, stems_dir: Path, parts_dir: Path, staging: Path) -> list[dict]:
+    """Encode each part of both sides into staging/<slug>/; one entry per part
+    either side has, in PART_KEYS order, with null for a side that lacks it."""
+    from .render_sf import PART_KEYS, PART_LABELS
+    out = staging / slug
+    out.mkdir(parents=True, exist_ok=True)
+    entries = []
+    for key in PART_KEYS:
+        entry = {"key": key, "label": PART_LABELS[key], "original": None, "rebuild": None}
+        stem = stems_dir / f"{key}.wav"
+        if stem.is_file() and _peak(stem) >= PART_GATE:
+            _mp3(run, stem, out / f"original-{key}.mp3", slug, gain=ORIGINAL_PART_GAIN)
+            entry["original"] = f"media/{slug}/original-{key}.mp3"
+        part = parts_dir / f"{key}.wav"
+        if part.is_file():
+            _mp3(run, part, out / f"rebuild-{key}.mp3", slug)
+            entry["rebuild"] = f"media/{slug}/rebuild-{key}.mp3"
+        if entry["original"] or entry["rebuild"]:
+            entries.append(entry)
+    return entries
+
+
 def _parse_file(path: Path):
     from .parser import parse_file
     return parse_file(str(path))
 
 
-def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict) -> dict:
+def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict,
+               parts: list[dict] | None = None) -> dict:
     doc = _parse_file(sc_path)
     raw, gz = sc_sizes(sc_path.read_text())
     sizes = {"wav": wav_bytes(_frames(clip)), "mp3": clip.stat().st_size, "sc": raw, "sc_gz": gz,
@@ -115,7 +161,8 @@ def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media:
     ratios = {"mp3": round(w / sizes["mp3"]), "sc": round(w / raw), "sc_gz": round(w / gz),
               "with_borrowed": round(w / (gz + sizes["kit"] + sizes["voice"]))}
     return {"slug": song["slug"], "title": song["title"], "artist": ARTIST, **media,
-            "sizes": sizes, "ratios": ratios, "singer": singer, "summary": summary(doc)}
+            "sizes": sizes, "ratios": ratios, "singer": singer, "summary": summary(doc),
+            "parts": parts or []}
 
 
 def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: bool = False,
@@ -154,8 +201,12 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
             if _stale(sc, clip, force):
                 _check(run([*cli, "encode", str(clip), "--title", song["title"], "--artist", ARTIST, "-o", str(sc)],
                            capture_output=True, text=True, env=env, cwd=root), slug, "encode")
-            if _stale(wav, sc, force):
-                proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav)],
+            parts_dir = work / f"{slug}.parts"
+            if _stale(wav, sc, force) or not parts_dir.is_dir():
+                if parts_dir.exists():
+                    shutil.rmtree(parts_dir)            # no part left over from an older render
+                proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav),
+                            "--parts", str(parts_dir)],
                            capture_output=True, text=True, env=env, cwd=root)
                 _check(proc, slug, "render")
                 log.write_text(proc.stderr or "")
@@ -164,9 +215,10 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
                      "sc": f"media/{slug}.sc"}
             shutil.copyfile(clip, media_staging / f"{slug}-original.mp3")
             shutil.copyfile(sc, media_staging / f"{slug}.sc")
-            _check(run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "192k",
-                        str(media_staging / f"{slug}-rebuild.mp3")], capture_output=True, text=True), slug, "mp3")
-            entries.append(song_entry(song, sc, clip, singer, names))
+            _mp3(run, wav, media_staging / f"{slug}-rebuild.mp3", slug, bitrate="192k")
+            from .separate import default_out_dir
+            parts = export_parts(run, slug, root / default_out_dir(clip), parts_dir, media_staging)
+            entries.append(song_entry(song, sc, clip, singer, names, parts))
         tot = {k: sum(e["sizes"][k] for e in entries) for k in ("wav", "mp3", "sc", "sc_gz")}
         tot["borrowed"] = sum(e["sizes"]["kit"] + e["sizes"]["voice"] for e in entries)
         data = {"built": _dt.date.today().isoformat(), "credit": CREDIT, "license_url": LICENSE_URL,

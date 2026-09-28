@@ -120,30 +120,96 @@
     color: var(--muted);
     font-size: 0.9rem;
   }
-  .players {
-    display: flex;
-    gap: 16px;
+  .transport {
     margin-bottom: 18px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
   }
-  .players .player {
-    flex: 1 1 0;
-    min-width: 0;
+  .transport .row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 14px;
   }
-  .players .player h3 {
-    margin: 0 0 6px;
+  .transport button {
+    font: inherit;
     font-size: 0.85rem;
+    color: var(--fg);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 14px;
+    cursor: pointer;
+  }
+  .transport button:focus-visible,
+  .transport input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .transport button.play {
+    min-width: 5.5em;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-card);
     font-weight: 600;
+  }
+  .transport .seek {
+    flex: 1 1 200px;
+    min-width: 0;
+    accent-color: var(--accent);
+  }
+  .transport .time {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
     color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
   }
-  .players audio {
-    width: 100%;
+  .transport .segmented {
+    display: inline-flex;
   }
-  @media (max-width: 700px) {
-    .players {
-      flex-direction: column;
-    }
+  .transport .segmented button {
+    border-radius: 0;
+  }
+  .transport .segmented button:first-child {
+    border-radius: 999px 0 0 999px;
+  }
+  .transport .segmented button:last-child {
+    border-radius: 0 999px 999px 0;
+    border-left: none;
+  }
+  .transport button[aria-pressed="true"] {
+    background: var(--chip-bg);
+    color: var(--chip-fg);
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  .transport .parts {
+    margin-top: 12px;
+  }
+  .transport .parts .label {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .transport button.part[aria-pressed="false"] {
+    color: var(--muted);
+    text-decoration: line-through;
+  }
+  .transport button.part:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    border-style: dashed;
+    text-decoration: none;
+  }
+  .transport .msg {
+    font-size: 0.8rem;
+    color: var(--muted);
+    min-height: 1.2em;
+    margin: 8px 0 0;
+  }
+  .transport .files {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin: 6px 0 0;
   }
   .size-strip {
     margin: 18px 0;
@@ -310,28 +376,275 @@
     });
   }
 
-  // ---- players (Task 4 will replace this function's body with a Web Audio transport) ----
+  // ---- transport: every part of both sides plays in sync, one gain per part ----
+  // Original ⇄ Rebuild only moves gains, so switching keeps the position.
+
+  var audioCtx = null;
+  var playingTransport = null;          // only one card plays at a time
+
+  function fmtTime(s) {
+    s = Math.max(0, Math.floor(s));
+    return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2);
+  }
+
+  function songParts(song) {
+    if (song.parts && song.parts.length) return song.parts;
+    // older data.json without parts: the full mixes act as one part
+    return [{ key: "mix", label: "Full mix", original: song.original, rebuild: song.rebuild }];
+  }
 
   function buildPlayers(song) {
-    var row = el("div", { cls: "players" });
+    var parts = songParts(song);
+    var box = el("div", { cls: "transport", attrs: { role: "group", "aria-label": "Player — " + song.title } });
+    var state = {
+      side: "original", on: {}, buffers: null, loading: null, gains: {}, sources: [],
+      playing: false, offset: 0, startedAt: 0, duration: (song.summary && song.summary.duration) || 30, raf: 0
+    };
+    parts.forEach(function (p) { state.on[p.key] = true; });
 
-    var orig = el("div", { cls: "player" });
-    orig.appendChild(el("h3", { text: "Original (30 s)" }));
-    var origAudio = el("audio", {
-      attrs: { controls: "", preload: "none", src: song.original, "aria-label": "Original — " + song.title }
+    // row 1: play, seek, time
+    var row1 = el("div", { cls: "row" });
+    var playBtn = el("button", { cls: "play", text: "Play", attrs: { type: "button", "aria-label": "Play — " + song.title } });
+    var seek = el("input", {
+      cls: "seek",
+      attrs: { type: "range", min: "0", max: String(state.duration), step: "0.01", value: "0", "aria-label": "Position — " + song.title }
     });
-    orig.appendChild(origAudio);
-    row.appendChild(orig);
+    var time = el("span", { cls: "time", text: "0:00 / " + fmtTime(state.duration), attrs: { "aria-live": "off" } });
+    row1.appendChild(playBtn);
+    row1.appendChild(seek);
+    row1.appendChild(time);
+    box.appendChild(row1);
 
-    var rebuilt = el("div", { cls: "player" });
-    rebuilt.appendChild(el("h3", { text: "Rebuilt from code" }));
-    var rebuiltAudio = el("audio", {
-      attrs: { controls: "", preload: "none", src: song.rebuild, "aria-label": "Rebuilt from code — " + song.title }
+    // row 2: Original | Rebuild
+    var row2 = el("div", { cls: "row" });
+    row2.style.marginTop = "10px";
+    var seg = el("div", { cls: "segmented", attrs: { role: "group", "aria-label": "Listen to" } });
+    var sideBtns = {
+      original: el("button", { text: "Original", attrs: { type: "button", "aria-pressed": "true" } }),
+      rebuild: el("button", { text: "Rebuild", attrs: { type: "button", "aria-pressed": "false" } })
+    };
+    seg.appendChild(sideBtns.original);
+    seg.appendChild(sideBtns.rebuild);
+    row2.appendChild(seg);
+    box.appendChild(row2);
+
+    // row 3: one toggle per part
+    var row3 = el("div", { cls: "row parts", attrs: { role: "group", "aria-label": "Parts" } });
+    row3.appendChild(el("span", { cls: "label", text: "Parts:" }));
+    var chips = {};
+    parts.forEach(function (p) {
+      var b = el("button", { cls: "part", text: p.label, attrs: { type: "button", "aria-pressed": "true" } });
+      b.addEventListener("click", function () {
+        state.on[p.key] = !state.on[p.key];
+        b.setAttribute("aria-pressed", state.on[p.key] ? "true" : "false");
+        applyGains();
+      });
+      chips[p.key] = b;
+      row3.appendChild(b);
     });
-    rebuilt.appendChild(rebuiltAudio);
-    row.appendChild(rebuilt);
+    box.appendChild(row3);
 
-    return row;
+    var msg = el("p", { cls: "msg", attrs: { role: "status" } });
+    box.appendChild(msg);
+
+    var files = el("p", { cls: "files" });
+    files.appendChild(document.createTextNode("Full mix files: "));
+    files.appendChild(el("a", { text: "original", href: song.original, attrs: { download: "" } }));
+    files.appendChild(document.createTextNode(" · "));
+    files.appendChild(el("a", { text: "rebuild", href: song.rebuild, attrs: { download: "" } }));
+    box.appendChild(files);
+
+    function updateChips() {
+      parts.forEach(function (p) {
+        var missing = p[state.side] == null;
+        var b = chips[p.key];
+        b.disabled = missing;
+        if (missing) {
+          b.title = state.side === "rebuild" ? "not in the rebuild" : "not separated";
+          b.setAttribute("aria-label", p.label + " — " + b.title);
+        } else {
+          b.removeAttribute("title");
+          b.removeAttribute("aria-label");
+        }
+      });
+    }
+
+    function position() {
+      if (!state.playing) return state.offset;
+      return Math.min(state.duration, state.offset + Math.max(0, audioCtx.currentTime - state.startedAt));
+    }
+
+    function showTime(t) {
+      time.textContent = fmtTime(t) + " / " + fmtTime(state.duration);
+      if (document.activeElement !== seek || !state.playing) seek.value = String(t);
+    }
+
+    function gainFor(p, side) {
+      return side === state.side && state.on[p.key] ? 1 : 0;
+    }
+
+    function applyGains() {
+      if (!audioCtx) return;
+      parts.forEach(function (p) {
+        ["original", "rebuild"].forEach(function (side) {
+          var g = state.gains[p.key + "/" + side];
+          if (g) g.gain.setTargetAtTime(gainFor(p, side), audioCtx.currentTime, 0.008);
+        });
+      });
+    }
+
+    function load() {
+      if (state.buffers) return Promise.resolve(state.buffers);
+      if (state.loading) return state.loading;
+      msg.textContent = "Loading parts…";
+      var jobs = [];
+      var buffers = {};
+      parts.forEach(function (p) {
+        ["original", "rebuild"].forEach(function (side) {
+          if (p[side] == null) return;
+          jobs.push(fetch(p[side])
+            .then(function (r) {
+              if (!r.ok) throw new Error(p[side] + ": " + r.status);
+              return r.arrayBuffer();
+            })
+            .then(function (ab) {
+              return new Promise(function (resolve, reject) {
+                audioCtx.decodeAudioData(ab, resolve, reject);   // callback form: older Safari
+              });
+            })
+            .then(function (buf) { buffers[p.key + "/" + side] = buf; }));
+        });
+      });
+      state.loading = Promise.all(jobs).then(function () {
+        state.buffers = buffers;
+        state.loading = null;
+        var longest = 0;
+        for (var k in buffers) longest = Math.max(longest, buffers[k].duration);
+        if (longest > 0) state.duration = longest;
+        seek.max = String(state.duration);
+        msg.textContent = "";
+        return buffers;
+      }, function (err) {
+        state.loading = null;
+        msg.textContent = "Could not load the parts; the full mix files are below.";
+        throw err;
+      });
+      return state.loading;
+    }
+
+    function stopSources() {
+      state.sources.forEach(function (src) {
+        src.onended = null;
+        try { src.stop(); } catch (e) { /* already stopped */ }
+        src.disconnect();
+      });
+      state.sources = [];
+      for (var k in state.gains) state.gains[k].disconnect();
+      state.gains = {};
+    }
+
+    function startAt(offset) {
+      stopSources();
+      var t0 = audioCtx.currentTime + 0.05;
+      parts.forEach(function (p) {
+        ["original", "rebuild"].forEach(function (side) {
+          var buf = state.buffers[p.key + "/" + side];
+          if (!buf) return;
+          var g = audioCtx.createGain();
+          g.gain.value = gainFor(p, side);
+          g.connect(audioCtx.destination);
+          state.gains[p.key + "/" + side] = g;
+          if (offset >= buf.duration) return;
+          var src = audioCtx.createBufferSource();
+          src.buffer = buf;
+          src.connect(g);
+          src.start(t0, offset);
+          state.sources.push(src);
+        });
+      });
+      state.offset = offset;
+      state.startedAt = t0;
+      state.playing = true;
+      playBtn.textContent = "Pause";
+      playBtn.setAttribute("aria-label", "Pause — " + song.title);
+      tick();
+    }
+
+    function tick() {
+      cancelAnimationFrame(state.raf);
+      if (!state.playing) return;
+      var t = position();
+      showTime(t);
+      if (t >= state.duration) {
+        pause();
+        state.offset = 0;
+        showTime(0);
+        return;
+      }
+      state.raf = requestAnimationFrame(tick);
+    }
+
+    function pause() {
+      if (!state.playing) return;
+      state.offset = position();
+      state.playing = false;
+      stopSources();
+      cancelAnimationFrame(state.raf);
+      playBtn.textContent = "Play";
+      playBtn.setAttribute("aria-label", "Play — " + song.title);
+      if (playingTransport === transport) playingTransport = null;
+    }
+
+    function play() {
+      if (!audioCtx) {
+        var Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) { msg.textContent = "This browser has no Web Audio; use the full mix files below."; return; }
+        audioCtx = new Ctx();
+      }
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      if (playingTransport && playingTransport !== transport) playingTransport.stop();
+      playingTransport = transport;
+      playBtn.disabled = true;
+      load().then(function () {
+        playBtn.disabled = false;
+        if (playingTransport !== transport) return;   // another card started while loading
+        startAt(state.offset >= state.duration ? 0 : state.offset);
+      }, function () {
+        playBtn.disabled = false;
+        if (playingTransport === transport) playingTransport = null;
+      });
+    }
+
+    var transport = {
+      stop: function () {
+        pause();
+        state.buffers = null;       // free the decoded parts; they reload on the next Play
+        state.gains = {};
+      }
+    };
+
+    playBtn.addEventListener("click", function () {
+      if (state.playing) pause(); else play();
+    });
+
+    seek.addEventListener("input", function () {
+      var t = Math.min(parseFloat(seek.value) || 0, state.duration);
+      if (state.playing) startAt(t);
+      else { state.offset = t; showTime(t); }
+    });
+
+    Object.keys(sideBtns).forEach(function (side) {
+      sideBtns[side].addEventListener("click", function () {
+        state.side = side;
+        sideBtns.original.setAttribute("aria-pressed", side === "original" ? "true" : "false");
+        sideBtns.rebuild.setAttribute("aria-pressed", side === "rebuild" ? "true" : "false");
+        updateChips();
+        applyGains();
+      });
+    });
+
+    updateChips();
+    return box;
   }
 
   // ---- size strip ----

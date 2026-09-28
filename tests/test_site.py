@@ -99,6 +99,11 @@ def _fake_run(root):
             out.write_text(SC)
         elif "render" in cmd:
             out.write_bytes(b"RIFF")
+            if "--parts" in cmd:
+                parts = Path(cmd[cmd.index("--parts") + 1])
+                parts.mkdir(parents=True, exist_ok=True)
+                (parts / "piano.wav").write_bytes(b"RIFF")
+                (parts / "lead_vocals.wav").write_bytes(b"RIFF")
             return subprocess.CompletedProcess(cmd, 0, "", "with-vocals: SoulX-Singer failed (x); sung with DiffSinger + Seed-VC")
         else:                                            # ffmpeg ... <out.mp3>
             out.write_bytes(b"ID3" + b"\0" * 997)
@@ -235,3 +240,48 @@ def test_page_reads_data_json_safely():
     sc_fetch = html[html.index("fetch(song.sc)"):html.index("fetch(song.sc)") + 200]
     assert "r.ok" in sc_fetch                                 # a failed .sc fetch is caught, not rendered raw
     assert "four clips" not in html                           # no counts hardcoded outside data.json
+    # part toggles (Task 4): an in-sync Web Audio transport with an Original/Rebuild switch
+    for needle in ("decodeAudioData", "createGain", "Original", "Rebuild", "aria-pressed",
+                   "not in the rebuild", "not separated", "Loading parts"):
+        assert needle in html
+
+
+def test_build_lists_parts_from_both_sides(tmp_path, monkeypatch):
+    import json
+
+    import numpy as np
+    import soundfile as sf
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    stems = root / "out" / "stems" / "discipline-30s"
+    stems.mkdir(parents=True)
+    for key in ("piano", "drums", "lead_vocals"):
+        sf.write(str(stems / f"{key}.wav"), np.full((22050, 2), 0.1, np.float32), 44100)
+    sf.write(str(stems / "bass.wav"), np.zeros((22050, 2), np.float32), 44100)     # silent: left out
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+    monkeypatch.chdir(root)
+    run, calls = _fake_run(root)
+    data = site.build(root, root / "site", root / "work", run=run, songs=[song])
+    parts = data["songs"][0]["parts"]
+    assert [p["key"] for p in parts] == ["lead_vocals", "piano", "drums"]
+    assert [p["label"] for p in parts] == ["Vocals", "Keys", "Drums"]
+    by = {p["key"]: p for p in parts}
+    assert by["drums"]["rebuild"] is None                     # the rebuild has no drums
+    assert by["piano"]["original"] == "media/discipline-30s/original-piano.mp3"
+    assert by["piano"]["rebuild"] == "media/discipline-30s/rebuild-piano.mp3"
+    for p in parts:
+        for side in ("original", "rebuild"):
+            if p[side] is not None:
+                assert (root / "site" / p[side]).exists()
+    assert "river" not in json.dumps(data).lower()
+    assert "river" not in " ".join(str(f) for f in (root / "site").rglob("*")).lower()
+    render = next(c for c in calls if "render" in c)
+    assert render[render.index("--parts") + 1] == str(root / "work" / "discipline-30s.parts")
+
+    n = len(calls)
+    import shutil
+    shutil.rmtree(root / "work" / "discipline-30s.parts")      # parts missing: the render is stale
+    site.build(root, root / "site", root / "work", run=run, songs=[song])
+    assert any("render" in c for c in calls[n:])
