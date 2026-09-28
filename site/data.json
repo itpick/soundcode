@@ -1,0 +1,335 @@
+{
+ "built": "2026-09-28",
+ "credit": "Nine Inch Nails \u2014 The Slip (2008), CC BY-NC-SA 3.0",
+ "license_url": "https://creativecommons.org/licenses/by-nc-sa/3.0/",
+ "songs": [
+  {
+   "slug": "discipline-30s",
+   "title": "Discipline",
+   "artist": "Nine Inch Nails",
+   "original": "media/discipline-30s-original.mp3",
+   "rebuild": "media/discipline-30s-rebuild.mp3",
+   "sc": "media/discipline-30s.sc",
+   "sizes": {
+    "wav": 5292044,
+    "mp3": 482176,
+    "sc": 19958,
+    "sc_gz": 6960,
+    "kit": 1049712,
+    "voice": 576000
+   },
+   "ratios": {
+    "mp3": 11,
+    "sc": 265,
+    "sc_gz": 760,
+    "with_borrowed": 3
+   },
+   "singer": "soulx",
+   "summary": {
+    "tempo": 123,
+    "instruments": [
+     "bass.electric",
+     "drums",
+     "gtr.acoustic",
+     "gtr.electric.distortion",
+     "voice.lead"
+    ],
+    "words": 31,
+    "duration": 30.0
+   },
+   "parts": [
+    {
+     "key": "lead_vocals",
+     "label": "Vocals",
+     "original": "media/discipline-30s/original-lead_vocals.mp3",
+     "rebuild": "media/discipline-30s/rebuild-lead_vocals.mp3"
+    },
+    {
+     "key": "backing_vocals",
+     "label": "Backing vocals",
+     "original": "media/discipline-30s/original-backing_vocals.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "piano",
+     "label": "Keys",
+     "original": "media/discipline-30s/original-piano.mp3",
+     "rebuild": "media/discipline-30s/rebuild-piano.mp3"
+    },
+    {
+     "key": "guitar",
+     "label": "Guitar",
+     "original": "media/discipline-30s/original-guitar.mp3",
+     "rebuild": "media/discipline-30s/rebuild-guitar.mp3"
+    },
+    {
+     "key": "bass",
+     "label": "Bass",
+     "original": "media/discipline-30s/original-bass.mp3",
+     "rebuild": "media/discipline-30s/rebuild-bass.mp3"
+    },
+    {
+     "key": "drums",
+     "label": "Drums",
+     "original": "media/discipline-30s/original-drums.mp3",
+     "rebuild": "media/discipline-30s/rebuild-drums.mp3"
+    },
+    {
+     "key": "other",
+     "label": "Other / synths",
+     "original": "media/discipline-30s/original-other.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "residual",
+     "label": "Residual",
+     "original": "media/discipline-30s/original-residual.mp3",
+     "rebuild": null
+    }
+   ]
+  },
+  {
+   "slug": "lights_in_the_sky-30s",
+   "title": "Lights in the Sky",
+   "artist": "Nine Inch Nails",
+   "original": "media/lights_in_the_sky-30s-original.mp3",
+   "rebuild": "media/lights_in_the_sky-30s-rebuild.mp3",
+   "sc": "media/lights_in_the_sky-30s.sc",
+   "sizes": {
+    "wav": 5292044,
+    "mp3": 482231,
+    "sc": 10774,
+    "sc_gz": 3884,
+    "kit": 0,
+    "voice": 576000
+   },
+   "ratios": {
+    "mp3": 11,
+    "sc": 491,
+    "sc_gz": 1363,
+    "with_borrowed": 9
+   },
+   "singer": "soulx",
+   "summary": {
+    "tempo": 110,
+    "instruments": [
+     "keys.piano",
+     "voice.lead"
+    ],
+    "words": 21,
+    "duration": 30.0
+   },
+   "parts": [
+    {
+     "key": "lead_vocals",
+     "label": "Vocals",
+     "original": "media/lights_in_the_sky-30s/original-lead_vocals.mp3",
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-lead_vocals.mp3"
+    },
+    {
+     "key": "backing_vocals",
+     "label": "Backing vocals",
+     "original": "media/lights_in_the_sky-30s/original-backing_vocals.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "piano",
+     "label": "Keys",
+     "original": "media/lights_in_the_sky-30s/original-piano.mp3",
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-piano.mp3"
+    },
+    {
+     "key": "guitar",
+     "label": "Guitar",
+     "original": "media/lights_in_the_sky-30s/original-guitar.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "drums",
+     "label": "Drums",
+     "original": "media/lights_in_the_sky-30s/original-drums.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "other",
+     "label": "Other / synths",
+     "original": "media/lights_in_the_sky-30s/original-other.mp3",
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-other.mp3"
+    },
+    {
+     "key": "residual",
+     "label": "Residual",
+     "original": "media/lights_in_the_sky-30s/original-residual.mp3",
+     "rebuild": null
+    }
+   ]
+  },
+  {
+   "slug": "999999-30s",
+   "title": "999,999",
+   "artist": "Nine Inch Nails",
+   "original": "media/999999-30s-original.mp3",
+   "rebuild": "media/999999-30s-rebuild.mp3",
+   "sc": "media/999999-30s.sc",
+   "sizes": {
+    "wav": 5292044,
+    "mp3": 481498,
+    "sc": 7990,
+    "sc_gz": 2577,
+    "kit": 0,
+    "voice": 0
+   },
+   "ratios": {
+    "mp3": 11,
+    "sc": 662,
+    "sc_gz": 2054,
+    "with_borrowed": 2054
+   },
+   "singer": null,
+   "summary": {
+    "tempo": 126,
+    "instruments": [
+     "bass.electric",
+     "brass.section",
+     "strings.ensemble",
+     "synth.pad",
+     "voice.choir",
+     "winds.flute"
+    ],
+    "words": 0,
+    "duration": 30.0
+   },
+   "parts": [
+    {
+     "key": "lead_vocals",
+     "label": "Vocals",
+     "original": "media/999999-30s/original-lead_vocals.mp3",
+     "rebuild": "media/999999-30s/rebuild-lead_vocals.mp3"
+    },
+    {
+     "key": "backing_vocals",
+     "label": "Backing vocals",
+     "original": "media/999999-30s/original-backing_vocals.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "piano",
+     "label": "Keys",
+     "original": "media/999999-30s/original-piano.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "bass",
+     "label": "Bass",
+     "original": "media/999999-30s/original-bass.mp3",
+     "rebuild": "media/999999-30s/rebuild-bass.mp3"
+    },
+    {
+     "key": "drums",
+     "label": "Drums",
+     "original": "media/999999-30s/original-drums.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "other",
+     "label": "Other / synths",
+     "original": "media/999999-30s/original-other.mp3",
+     "rebuild": "media/999999-30s/rebuild-other.mp3"
+    },
+    {
+     "key": "residual",
+     "label": "Residual",
+     "original": "media/999999-30s/original-residual.mp3",
+     "rebuild": null
+    }
+   ]
+  },
+  {
+   "slug": "corona_radiata-30s",
+   "title": "Corona Radiata",
+   "artist": "Nine Inch Nails",
+   "original": "media/corona_radiata-30s-original.mp3",
+   "rebuild": "media/corona_radiata-30s-rebuild.mp3",
+   "sc": "media/corona_radiata-30s.sc",
+   "sizes": {
+    "wav": 5292044,
+    "mp3": 481527,
+    "sc": 10916,
+    "sc_gz": 3691,
+    "kit": 0,
+    "voice": 0
+   },
+   "ratios": {
+    "mp3": 11,
+    "sc": 485,
+    "sc_gz": 1434,
+    "with_borrowed": 1434
+   },
+   "singer": null,
+   "summary": {
+    "tempo": 120,
+    "instruments": [
+     "bass.electric",
+     "gtr.acoustic",
+     "keys.piano",
+     "strings.harp",
+     "synth.pad",
+     "voice.choir"
+    ],
+    "words": 0,
+    "duration": 30.0
+   },
+   "parts": [
+    {
+     "key": "lead_vocals",
+     "label": "Vocals",
+     "original": null,
+     "rebuild": "media/corona_radiata-30s/rebuild-lead_vocals.mp3"
+    },
+    {
+     "key": "backing_vocals",
+     "label": "Backing vocals",
+     "original": "media/corona_radiata-30s/original-backing_vocals.mp3",
+     "rebuild": null
+    },
+    {
+     "key": "piano",
+     "label": "Keys",
+     "original": "media/corona_radiata-30s/original-piano.mp3",
+     "rebuild": "media/corona_radiata-30s/rebuild-piano.mp3"
+    },
+    {
+     "key": "guitar",
+     "label": "Guitar",
+     "original": "media/corona_radiata-30s/original-guitar.mp3",
+     "rebuild": "media/corona_radiata-30s/rebuild-guitar.mp3"
+    },
+    {
+     "key": "bass",
+     "label": "Bass",
+     "original": "media/corona_radiata-30s/original-bass.mp3",
+     "rebuild": "media/corona_radiata-30s/rebuild-bass.mp3"
+    },
+    {
+     "key": "other",
+     "label": "Other / synths",
+     "original": "media/corona_radiata-30s/original-other.mp3",
+     "rebuild": "media/corona_radiata-30s/rebuild-other.mp3"
+    },
+    {
+     "key": "residual",
+     "label": "Residual",
+     "original": "media/corona_radiata-30s/original-residual.mp3",
+     "rebuild": null
+    }
+   ]
+  }
+ ],
+ "totals": {
+  "wav": 21168176,
+  "mp3": 1927432,
+  "sc": 49638,
+  "sc_gz": 17112,
+  "borrowed": 2201712
+ }
+}
