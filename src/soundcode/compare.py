@@ -274,7 +274,7 @@ def _write_wav(path: Path, y_mono: np.ndarray) -> None:
 
 def run(original, sc_or_wav, out_dir, engine: str = "sf2",
         render_streams=None, stems_dir=None, with_vocals: bool = False,
-        voice_ref=None, no_fx: bool = False) -> dict:
+        voice_ref=None, no_fx: bool = False, singer: str | None = None) -> dict:
     from .parser import parse_file
     from .separate import STEMS, default_out_dir, read_stereo, separate
 
@@ -319,7 +319,7 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             import librosa
 
             from . import sing
-            wav, _ = sing.sing(doc, voice_ref)
+            wav, _ = sing.sing(doc, voice_ref, singer=singer)
             sung_wav = wav
             rend["lead_vocals"] = sung_stream(doc, wav, n)
             notes_side["sung"] = "lead_vocals row compares the sung vocal (DiffSinger -> Seed-VC)"

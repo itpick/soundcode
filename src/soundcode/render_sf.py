@@ -233,7 +233,7 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
 
 def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
            with_vocals: bool = False, voice_ref: Path | None = None,
-           no_fx: bool = False) -> np.ndarray:
+           no_fx: bool = False, singer: str | None = None) -> np.ndarray:
     sr = sr or doc.sample_rate
     streams = render_streams(doc, sr, sf2, no_fx=no_fx)
     if with_vocals:
@@ -243,7 +243,7 @@ def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
         from .sing_score import NoVocalError, vocal_stream
         try:
             name = vocal_stream(doc)
-            wav, warns = sing.sing(doc, voice_ref)
+            wav, warns = sing.sing(doc, voice_ref, singer=singer)
         except NoVocalError as exc:
             print(f"with-vocals: {exc}; rendering instruments only", file=sys.stderr)
             return mix(doc, streams, sr, with_vocals)
@@ -292,10 +292,10 @@ def _load_stream(path: Path, sr: int, n: int, stream, no_fx: bool = False) -> np
 
 def render_to_file(doc: Document, path: str, sr: int | None = None,
                    with_vocals: bool = False, voice_ref: Path | None = None,
-                   no_fx: bool = False) -> tuple[int, float]:
+                   no_fx: bool = False, singer: str | None = None) -> tuple[int, float]:
     import soundfile as sf
 
     sr = sr or doc.sample_rate
-    audio = render(doc, sr, with_vocals=with_vocals, voice_ref=voice_ref, no_fx=no_fx)
+    audio = render(doc, sr, with_vocals=with_vocals, voice_ref=voice_ref, no_fx=no_fx, singer=singer)
     sf.write(path, audio, sr, subtype="PCM_16")
     return len(expand(doc)), audio.shape[0] / sr

@@ -1,0 +1,203 @@
+"""SoulX-Singer (Soul-AILab, Apache-2.0): zero-shot, melody-conditioned singing.
+
+One model sings lyrics + melody (f0 from :contour.vox) in the voice of a short
+reference clip of the original singer — no separate voice-conversion step.
+Runs on a remote CUDA box over ssh (~/infinity-engine/soulx-singer there;
+scripts/install_soulx_remote.sh), like seedvc.py.
+
+Metadata format, pinned from SoulX-Singer@81aeb3a (preprocess/tools/midi_parser.py):
+  one dict per segment: index, language, time [ms0, ms1] (song time), duration
+  (s per note), text (word per note; <SP> rests), phoneme (en_ARPAbet-with-stress
+  per note; filled remotely by SoulX's own g2p_transform), note_pitch (MIDI; 0 for
+  rests), note_type (1 rest, 2 a word's first note, 3 continuation / melisma),
+  f0 (Hz at 24 kHz / hop 480 = 50 frames per second).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import subprocess
+import tempfile
+import uuid
+from pathlib import Path
+
+import numpy as np
+
+from . import sing_score as ss
+from .sing_score import SingError
+
+F0_RATE = 50.0
+SR = 24000
+MAX_SEG_S = 15.0
+REST_MIN_S = 0.05
+REMOTE_DIR = "infinity-engine/soulx-singer"
+
+
+def _phoneme(word: str) -> str:
+    """SoulX's format (en_ + stressed ARPAbet). The remote run refills these with
+    SoulX's own g2p_transform; this local copy keeps previews and tests honest."""
+    if word == "<SP>":
+        return "<SP>"
+    phs, hit = ss.g2p(word)                       # also loads the dictionary
+    prons = ss._cmu.get(word) if hit else None
+    if prons:
+        return "en_" + "-".join(prons[0])
+    return "en_" + "-".join(p[3:].upper() for p in phs)
+
+
+def _notes_with_words(doc) -> list[tuple[float, float, int, str, int]]:
+    """(start, end, midi, text, type) for every sung note, in order."""
+    notes = ss.vocal_notes(doc, ss.vocal_stream(doc))
+    ws = ss.words(doc)
+    out, last_word = [], None
+    for a, b, p in notes:
+        w = next((x for x in ws if x[0] - 0.03 <= a < x[1]), None)
+        if w is None:
+            out.append((a, b, p, "ah", 2))
+            last_word = None
+        elif w is last_word:
+            out.append((a, b, p, w[2], 3))
+        else:
+            out.append((a, b, p, w[2], 2))
+            last_word = w
+    return out
+
+
+def _f0(doc, t0: float, t1: float, notes) -> list[float]:
+    from .contour import STEP_S, read_contour
+
+    t = t0 + np.arange(round((t1 - t0) * F0_RATE)) / F0_RATE
+    hz = np.zeros(len(t))
+    for a, b, p, _, _ in notes:
+        hz[(t >= a) & (t < b)] = 440.0 * 2 ** ((p - 69) / 12)
+    for start, vals in read_contour(doc):
+        seg_t = start + np.arange(len(vals)) * STEP_S
+        inside = (t >= seg_t[0]) & (t < seg_t[-1] + STEP_S)
+        hz[inside] = 440.0 * 2 ** ((np.interp(t[inside], seg_t, vals) - 6900) / 1200)
+    return [round(float(x), 1) for x in hz]
+
+
+def _segment(doc, t0: float, t1: float, notes, index: str) -> dict:
+    items: list[tuple[str, float, int, int]] = []           # text, dur, pitch, type
+    cur = t0
+    for a, b, p, text, typ in notes:
+        a, b = max(a, t0), min(b, t1)
+        if b <= a:
+            continue
+        if a - cur >= REST_MIN_S:
+            items.append(("<SP>", a - cur, 0, 1))
+        elif items:                                           # tiny gap: extend the previous note
+            items[-1] = (items[-1][0], items[-1][1] + (a - cur), items[-1][2], items[-1][3])
+        else:
+            a = cur
+        items.append((text, b - a, p, typ))
+        cur = b
+    if t1 - cur > 1e-6:
+        items.append(("<SP>", t1 - cur, 0, 1))
+    durs = [round(d, 2) for _, d, _, _ in items]
+    durs[-1] = round(durs[-1] + (t1 - t0) - sum(durs), 2)
+    return {"index": index, "language": "English", "time": [int(round(t0 * 1000)), int(round(t1 * 1000))],
+            "duration": " ".join(f"{d:.2f}" for d in durs),
+            "text": " ".join(x[0] for x in items),
+            "phoneme": " ".join(_phoneme(x[0]) for x in items),
+            "note_pitch": " ".join(str(x[2]) for x in items),
+            "note_type": " ".join(str(x[3]) for x in items),
+            "f0": " ".join(str(v) for v in _f0(doc, t0, t1, notes))}
+
+
+def metadata(doc, t0: float, t1: float) -> list[dict]:
+    """SoulX segments covering [t0, t1], split at rests into pieces <= 15 s."""
+    notes = [n for n in _notes_with_words(doc) if n[1] > t0 and n[0] < t1]
+    cuts, start = [], t0
+    for (a0, b0, *_), (a1, *_) in zip(notes, notes[1:]):
+        if a1 - b0 >= 0.3 and a1 - start > 1.0 and (a1 - start) >= MAX_SEG_S * 0.5:
+            cuts.append((start, (b0 + a1) / 2))
+            start = (b0 + a1) / 2
+    cuts.append((start, t1))
+    segs, fixed = [], []
+    for a, b in cuts:                                         # hard cap: split anything still too long
+        while b - a > MAX_SEG_S:
+            fixed.append((a, a + MAX_SEG_S))
+            a += MAX_SEG_S
+        fixed.append((a, b))
+    for k, (a, b) in enumerate(fixed):
+        inside = [n for n in notes if n[1] > a and n[0] < b]
+        segs.append(_segment(doc, a, b, inside, f"vocal_{int(a * 1000)}_{int(b * 1000)}"))
+    return segs
+
+
+def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:
+    notes = _notes_with_words(doc)
+    if not notes:
+        raise SingError("no vocal notes for a SoulX prompt")
+    t0 = max(0.0, notes[0][0] - 0.2)
+    end = t0 + want_s
+    for (_, b0, *_), (a1, *_) in zip(notes, notes[1:]):      # end at a rest after ~want_s
+        if b0 >= t0 + want_s * 0.6 and a1 - b0 >= 0.2:
+            end = (b0 + a1) / 2
+            break
+    return t0, min(end, t0 + 12.0)
+
+
+def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None) -> np.ndarray:
+    """Sing the whole vocal remotely; returns mono float32 at 44.1 kHz."""
+    import librosa
+    import soundfile as sf
+
+    host = os.environ.get("SOUNDCODE_SOULX_HOST") or os.environ.get("SOUNDCODE_SEEDVC_HOST") or "framepick"
+    p0, p1 = prompt or prompt_window(doc)
+    dur = doc.duration or max(n[1] for n in _notes_with_words(doc)) + 1.0
+    target = metadata(doc, 0.0, dur)
+    pmeta = metadata(doc, p0, p1)[:1]
+    pmeta[0]["time"] = [0, int(round((p1 - p0) * 1000))]
+    y, _ = librosa.load(str(ref_wav), sr=SR, mono=True, offset=p0, duration=p1 - p0)
+    job = f"infinity-engine/jobs/{uuid.uuid4().hex[:10]}"
+    ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host]
+    scp = ["scp", "-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+
+    def run(cmd, what, timeout=600):
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise SingError(f"SoulX on {host}: {what} timed out after {timeout}s") from exc
+        if proc.returncode != 0:
+            tail = [ln for ln in (proc.stderr or proc.stdout).strip().splitlines()
+                    if ln.strip() and "AUTHORIZED" not in ln and not ln.startswith("=")]
+            raise SingError(f"SoulX on {host}: {what} failed ({tail[-1] if tail else proc.returncode})")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "target.json").write_text(json.dumps(target))
+        (tmp / "prompt.json").write_text(json.dumps(pmeta))
+        sf.write(str(tmp / "prompt.wav"), y, SR)
+        fill = ("import json,sys; from preprocess.tools.g2p import g2p_transform as g\n"
+                "for p in sys.argv[1:]:\n"
+                "    d=json.load(open(p))\n"
+                "    for s in d: s['phoneme']=' '.join(g(s['text'].split(),'English'))\n"
+                "    json.dump(d,open(p,'w'))\n")
+        (tmp / "fill.py").write_text(fill)
+        remote = (f"cd {REMOTE_DIR} && export LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH "
+                  f"PYTHONPATH=$PWD && .venv/bin/python ~/{job}/fill.py ~/{job}/target.json ~/{job}/prompt.json && "
+                  f".venv/bin/python -m cli.inference --device cuda "
+                  f"--model_path pretrained_models/SoulX-Singer/model.pt "
+                  f"--config soulxsinger/config/soulxsinger.yaml "
+                  f"--prompt_wav_path ~/{job}/prompt.wav --prompt_metadata_path ~/{job}/prompt.json "
+                  f"--target_metadata_path ~/{job}/target.json "
+                  f"--phoneset_path soulxsinger/utils/phoneme/phone_set.json "
+                  f"--save_dir ~/{job}/out --auto_shift --pitch_shift 0 --control melody")
+        out = tmp / "generated.wav"
+        try:
+            run([*ssh, f"mkdir -p {job}"], "mkdir")
+            run([*scp, *(str(tmp / f) for f in ("target.json", "prompt.json", "prompt.wav", "fill.py")),
+                 f"{host}:{job}/"], "upload")
+            run([*ssh, remote], "inference", timeout=1800)
+            run([*scp, f"{host}:{job}/out/generated.wav", str(out)], "download")
+        finally:
+            try:
+                subprocess.run([*ssh, f"rm -rf {shlex.quote(job)}"], capture_output=True, text=True, timeout=120)
+            except subprocess.TimeoutExpired:
+                pass
+        g, _ = librosa.load(str(out), sr=44100, mono=True)
+    return g.astype(np.float32)

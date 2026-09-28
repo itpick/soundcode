@@ -85,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="sf2: sampled instruments (default); mock: crude synth")
     p_render.add_argument("--no-fx", action="store_true",
                           help="skip each part's production profile (fx lines), for A/B")
+    p_render.add_argument("--singer", choices=("diffsinger", "soulx"), default=None,
+                          help="who sings --with-vocals (default: sing.DEFAULT_SINGER)")
     p_render.add_argument("--voice-ref", default=None,
                           help="the original singer (wav); default out/stems/<source>/lead_vocals.wav")
     p_render.add_argument("--with-vocals", action="store_true",
@@ -104,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
                        help="score the sung lead vocal (DiffSinger -> Seed-VC)")
     p_cmp.add_argument("--voice-ref", default=None)
     p_cmp.add_argument("--no-fx", action="store_true", help="render without fx lines (A/B)")
+    p_cmp.add_argument("--singer", choices=("diffsinger", "soulx"), default=None)
 
     p_encode = sub.add_parser("encode", help="analyse audio and write a .sc file")
     p_encode.add_argument("file")
@@ -134,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
                     return render_sf.render_to_file(
                         doc, out, sr, with_vocals=args.with_vocals,
                         voice_ref=Path(args.voice_ref) if args.voice_ref else None,
-                        no_fx=args.no_fx)
+                        no_fx=args.no_fx, singer=args.singer)
                 suffix = ".render.wav"
             out = args.out or str(Path(args.file).with_suffix(suffix))
             try:
@@ -179,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                 rep = cmp.run(args.original, args.render, out, engine=args.engine,
                               with_vocals=args.with_vocals,
                               voice_ref=Path(args.voice_ref) if args.voice_ref else None,
-                              no_fx=args.no_fx)
+                              no_fx=args.no_fx, singer=args.singer)
             except SingError as exc:
                 print(f"compare failed: {exc}", file=sys.stderr)
                 return 2

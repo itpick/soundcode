@@ -51,12 +51,18 @@ def cache_key(doc, ref: Path, settings: dict) -> str:
     return h.hexdigest()[:16]
 
 
+DEFAULT_SINGER = "diffsinger"
+
+
 def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
-         steps: int = 50, durations: str = "model") -> tuple[Path, list[str]]:
+         steps: int = 50, durations: str = "model",
+         singer: str | None = None) -> tuple[Path, list[str]]:
+    singer = singer or DEFAULT_SINGER
     import soundfile as sf
 
     ref = voice_ref(doc, ref)
-    settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations}
+    settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations,
+                "singer": singer}
     out = Path(cache) / f"{cache_key(doc, ref, settings)}.wav"
     score = ss.build(doc, durations=durations)
     if out.exists():
@@ -68,6 +74,17 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
             pass
         out.unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if singer == "soulx":
+        from . import soulx
+        try:
+            y = soulx.render(doc, ref)
+            part = out.with_suffix(".part.wav")
+            sf.write(str(part), y, 44100)
+            part.rename(out)
+            return out, score.warnings
+        except SingError as exc:
+            score.warnings.append(f"SoulX-Singer failed ({exc}); sung with DiffSinger + Seed-VC")
+            return sing(doc, ref, cache, steps, durations, singer="diffsinger")[0], score.warnings
     raw = out.with_suffix(".diffsinger.wav")
     sf.write(str(raw), diffsinger.render(score, mode=settings["mode"]), ss.SR)
     seedvc.convert(raw, ref, out, steps=steps)
