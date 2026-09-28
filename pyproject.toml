@@ -51,3 +51,7 @@ artifacts = ["src/soundcode/data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not real'"
+markers = [
+    "real: loads real models (MERT, tsumugi, torchcrepe, whisper) against real audio fixtures; skipped by default (run with -m real). See tests/test_score_real.py.",
+]

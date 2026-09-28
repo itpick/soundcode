@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     p_bench.add_argument("--label", default="")
     p_bench.add_argument("--force", action="store_true")
     p_bench.add_argument("--calibrate", action="store_true",
-                         help="re-measure the anchors (not yet implemented)")
+                         help="re-measure the anchors (floor/ceiling) from tier A and exit")
 
     p_serve = sub.add_parser("serve", help="local A/B listening server")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -293,10 +293,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.cmd == "bench":
-            if args.calibrate:
-                print("not yet")
-                return 0
             from .score import bench
+
+            if args.calibrate:
+                res = bench.calibrate(Path("."))
+                for part_type in sorted(res["anchors"]):
+                    for metric in sorted(res["anchors"][part_type]):
+                        c = res["ceilings"].get(part_type, {}).get(metric)
+                        f = res["floors"].get(part_type, {}).get(metric)
+                        print(f"calibrate: {part_type}.{metric}: floor={f} ceiling={c}")
+                for w in res["warnings"]:
+                    print(f"calibrate: {w}")
+                print(f"calibrate: wrote {bench.anchors.ANCHORS_PATH}")
+                return 0
 
             res = bench.run_bench(args.tier, args.label, Path("."), force=args.force)
             print(f"run: {res['run_dir']}")

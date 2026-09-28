@@ -412,12 +412,60 @@ def _states(y_ref, y_est, sr, secs, wins) -> dict:
     return {"sections": [state(s) for s in secs], "windows": [state(s) for s in wins]}
 
 
+def _slice_metrics_full(f_ref, f_est, fr_ref, fr_est, s, key: str, sr: int, lag,
+                        vo_ref=None, vo_est=None, pairs=None) -> dict:
+    """One slice's full derived metric dict: `metrics.slice_metrics` (chroma
+    /note/onset/F0/level), lag, MERT cosine, spectral distance, and -- when
+    given -- per-voice drum onset F1/decay-ratio error and word-timing MAE.
+
+    The single derivation `_score_part_audio` uses for every section/window
+    /song slice, and `part_metrics` uses for its one (song-length) slice --
+    factored out so the two never drift apart (design doc, "From metrics to
+    0-100"; `bench.calibrate` measures its anchors from `part_metrics`, so
+    this is also what calibration measures)."""
+    from .. import compare
+    from . import drums, embed, metrics
+
+    m = metrics.slice_metrics(f_ref, f_est, s, key)
+    m["level_diff_db_abs"] = _abs(m["level_diff_db"])
+    m["lag_ms"] = lag
+    m["lag_ms_abs"] = _abs(lag)
+    m["mert"] = embed.cosine(fr_ref, fr_est, s.a, s.b)
+    yr, ye = metrics._slice_y(f_ref, s.a, s.b), metrics._slice_y(f_est, s.a, s.b)
+    m["spectral_db"] = compare.spectral_db(yr, ye, sr) if yr.size and ye.size else None
+    if vo_ref is not None:
+        f1s = drums.voice_f1(vo_ref, vo_est, s.a, s.b)
+        m["drum_voice_f1"] = _mean(f1s.values())
+        m["drum_voice_f1_by_voice"] = f1s
+        m["decay_ratio_err"] = _decay_ratio_err(f_ref.y, f_est.y, sr, vo_ref, vo_est, s.a, s.b)
+    if pairs is not None:
+        m["word_mae_s"] = _word_mae(pairs, s.a, s.b)
+    return m
+
+
+def _vocal_extras(f_ref, f_est, sr: int, doc, ref_path: Path, est_path: Path,
+                  w_ref, w_est) -> dict:
+    """The song-level vocal-only metrics: `voice_sim` (always), plus,
+    when `doc` is given, `sung_wer`/`sung_wer_original`/`sung_wer_excess`.
+    `doc=None` (no lyrics to align against, e.g. `part_metrics` comparing
+    two different songs' stems) simply leaves the WER keys out."""
+    from .. import compare
+
+    out = {"voice_sim": compare.voice_similarity(f_ref.y, f_est.y, sr)}
+    if doc is not None:
+        ws_est = compare.sung_wer(doc, est_path, words=w_est)
+        ws_ref = compare.sung_wer(doc, ref_path, words=w_ref)
+        out["sung_wer"], out["sung_wer_original"] = ws_est, ws_ref
+        out["sung_wer_excess"] = (max(0.0, ws_est - ws_ref)
+                                  if ws_est is not None and ws_ref is not None else None)
+    return out
+
+
 def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, doc, song_s,
                       secs, wins, drum_cache: Path) -> tuple[dict, list[dict]]:
     """One active part with a rebuilt counterpart: every metric on every
     slice. Heavy features (librosa, basic-pitch, torchcrepe, MERT, tsumugi,
     Whisper) run once per file; the slices only index into them."""
-    from .. import compare
     from . import drums, embed, metrics
 
     part_type = PART_TYPE[key]
@@ -436,26 +484,14 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
     if key == "drums":
         vo_ref, vo_est = drums.voice_onsets(ref_path, drum_cache), drums.voice_onsets(est_path, drum_cache)
     pairs = None
+    w_ref = w_est = None
     if key in VOCAL_PARTS:
         w_ref, w_est = _words(ref_path), _words(est_path)
         pairs = _word_pairs(w_ref, w_est)
 
     def one(s, lag):
-        m = metrics.slice_metrics(f_ref, f_est, s, key)
-        m["level_diff_db_abs"] = _abs(m["level_diff_db"])
-        m["lag_ms"] = lag
-        m["lag_ms_abs"] = _abs(lag)
-        m["mert"] = embed.cosine(fr_ref, fr_est, s.a, s.b)
-        yr, ye = metrics._slice_y(f_ref, s.a, s.b), metrics._slice_y(f_est, s.a, s.b)
-        m["spectral_db"] = compare.spectral_db(yr, ye, sr) if yr.size and ye.size else None
-        if vo_ref is not None:
-            f1s = drums.voice_f1(vo_ref, vo_est, s.a, s.b)
-            m["drum_voice_f1"] = _mean(f1s.values())
-            m["drum_voice_f1_by_voice"] = f1s
-            m["decay_ratio_err"] = _decay_ratio_err(f_ref.y, f_est.y, sr, vo_ref, vo_est, s.a, s.b)
-        if pairs is not None:
-            m["word_mae_s"] = _word_mae(pairs, s.a, s.b)
-        return m
+        return _slice_metrics_full(f_ref, f_est, fr_ref, fr_est, s, key, sr, lag,
+                                   vo_ref=vo_ref, vo_est=vo_est, pairs=pairs)
 
     sec_ms = [one(s, lag) if st == "ok" else {}
               for s, lag, st in zip(secs, sec_lags, states["sections"])]
@@ -464,15 +500,74 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
     song_m = one(song_s, song_lag)
     song_m["missing_windows"] = missing_windows
     if key in VOCAL_PARTS:
-        song_m["voice_sim"] = compare.voice_similarity(f_ref.y, f_est.y, sr)
-        ws_est = compare.sung_wer(doc, est_path, words=w_est)
-        ws_ref = compare.sung_wer(doc, ref_path, words=w_ref)
-        song_m["sung_wer"], song_m["sung_wer_original"] = ws_est, ws_ref
-        song_m["sung_wer_excess"] = (max(0.0, ws_est - ws_ref)
-                                     if ws_est is not None and ws_ref is not None else None)
+        song_m.update(_vocal_extras(f_ref, f_est, sr, doc, ref_path, est_path, w_ref, w_est))
 
     res = _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, states)
     return res, win_dr
+
+
+def part_metrics(ref_path: Path, est_path: Path, key: str, *, doc=None,
+                 drum_cache: Path | None = None) -> dict:
+    """The song-level (whole-file) metric dict for `key` between `ref_path`
+    and `est_path` -- exactly the derivation `score_song` uses for a part's
+    `song` slice (`_score_part_audio`'s `one(song_s, song_lag)`, via the
+    shared `_slice_metrics_full`/`_vocal_extras` helpers), but standalone:
+    it loads and features the two files itself, so it also works for two
+    files that were never part of the same `score_song` call.
+
+    Used by `score_song` implicitly (through `_score_part_audio`) and
+    directly by `bench.calibrate`, which measures each anchor's floor and
+    ceiling from real stem pairs -- a second separation of the same song
+    (ceiling), or a different song's same part (floor) -- and needs exactly
+    the metrics `score_song` itself would report, not a re-derivation of
+    them.
+
+    `doc` (a parsed `.sc` `Document`) enables the lyrics-aligned
+    `sung_wer`/`sung_wer_original`/`sung_wer_excess` for `VOCAL_PARTS`;
+    without it (the default -- there is no single song's lyrics to align
+    two different songs' vocals against) those three keys are simply
+    absent. `voice_sim` and `word_mae_s` don't need `doc` and are always
+    attempted. `drum_cache` enables `drum_voice_f1`/`decay_ratio_err` for
+    `"drums"`; without it those two are absent too.
+
+    Returns a flat `{metric_name: value}` dict, as `score_slice` takes.
+    """
+    from . import embed, metrics, slices
+
+    ref_path, est_path = Path(ref_path), Path(est_path)
+    sr = metrics.SR
+    y_ref = _load_mono(ref_path)
+    y_est = _fit(_load_mono(est_path), y_ref.shape[-1])
+    duration = y_ref.shape[-1] / sr
+    song_s = slices.song(duration)
+    wins = slices.windows(duration)
+    secs: list = []                    # no section structure between two bare stems
+
+    pitched, f0 = key in metrics.NOTE_F1_PARTS, key in metrics.F0_PARTS
+    fmin = BASS_F0_FMIN if key == "bass" else 50.0
+    f_ref = metrics.Features.of(y_ref, sr, pitched, f0, f0_fmin=fmin)
+    f_est = metrics.Features.of(y_est, sr, pitched, f0, f0_fmin=fmin)
+    fr_ref, fr_est = embed.frames(ref_path), embed.frames(est_path)
+
+    states = _states(y_ref, y_est, sr, secs, wins)
+    _win_dr, _sec_lags, song_lag, _missing = _lags(y_ref, y_est, sr, secs, wins, states)
+
+    vo_ref = vo_est = None
+    if key == "drums" and drum_cache is not None:
+        from . import drums
+        vo_ref, vo_est = drums.voice_onsets(ref_path, drum_cache), drums.voice_onsets(est_path, drum_cache)
+
+    pairs = None
+    w_ref = w_est = None
+    if key in VOCAL_PARTS:
+        w_ref, w_est = _words(ref_path), _words(est_path)
+        pairs = _word_pairs(w_ref, w_est)
+
+    m = _slice_metrics_full(f_ref, f_est, fr_ref, fr_est, song_s, key, sr, song_lag,
+                            vo_ref=vo_ref, vo_est=vo_est, pairs=pairs)
+    if key in VOCAL_PARTS:
+        m.update(_vocal_extras(f_ref, f_est, sr, doc, ref_path, est_path, w_ref, w_est))
+    return m
 
 
 def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[dict, list[dict]]:

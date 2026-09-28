@@ -372,13 +372,135 @@ def test_run_bench_interrupted_by_score_song_leaves_history_and_readme_untouched
 
 
 # --------------------------------------------------------------------------
+# calibrate (Task 7): fake metric values -- median logic, degenerate/flip
+# guard. `scorer.part_metrics` and `scorer.PART_TYPE` are faked throughout,
+# so no real audio/model is touched; `_fake_run` fakes `separate` the same
+# way the `prepare` tests do.
+# --------------------------------------------------------------------------
+
+_CALIB_ENTRIES = [
+    {"name": "song-a", "source": "audio/test/song-a.wav", "start": None, "end": None,
+     "title": "A", "artist": "Artist"},
+    {"name": "song-b", "source": "audio/test/song-b.wav", "start": None, "end": None,
+     "title": "B", "artist": "Artist"},
+    {"name": "song-c", "source": "audio/test/song-c.wav", "start": None, "end": None,
+     "title": "C", "artist": "Artist"},
+]
+
+
+def _mk_calib_sources(tmp_path):
+    for e in _CALIB_ENTRIES:
+        _mk_source(tmp_path, e)
+
+
+def _write_anchors(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+
+
+def test_calibrate_ceiling_and_floor_are_medians_over_tier_a(tmp_path, monkeypatch):
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    run, calls = _fake_run()
+
+    # ceiling values keyed by ref song (each song vs its own 2nd separation):
+    # median of {0.90, 0.95, 0.99} is 0.95, not the mean (0.9467)
+    ceiling_by_song = {"song-a": 0.90, "song-b": 0.95, "song-c": 0.99}
+    # floor values keyed by (ref, est) song pair: median of the 6 ordered
+    # pairs' values ({0.1, 0.1, 0.1, 0.3, 0.3, 0.3}) is 0.2
+    floor_by_pair = {("song-a", "song-b"): 0.1, ("song-a", "song-c"): 0.1,
+                     ("song-b", "song-c"): 0.1, ("song-b", "song-a"): 0.3,
+                     ("song-c", "song-a"): 0.3, ("song-c", "song-b"): 0.3}
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        ref_path, est_path = Path(ref_path), Path(est_path)
+        ref_song = ref_path.parent.name
+        if "calib" in est_path.parts:
+            return {"note_f1": ceiling_by_song[ref_song]}
+        return {"note_f1": floor_by_pair[(ref_song, est_path.parent.name)]}
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {
+        "pitched": {"note_f1": {"floor": 0.0, "ceiling": 0.5, "weight": 1, "axis": "what"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    assert res["ceilings"]["pitched"]["note_f1"] == pytest.approx(0.95)
+    assert res["floors"]["pitched"]["note_f1"] == pytest.approx(0.2)
+    new = json.loads(anchors_path.read_text())
+    assert new["pitched"]["note_f1"]["floor"] == pytest.approx(0.2)
+    assert new["pitched"]["note_f1"]["ceiling"] == pytest.approx(0.95)
+    assert new["pitched"]["note_f1"]["weight"] == 1 and new["pitched"]["note_f1"]["axis"] == "what"
+    assert not anchors_path.with_name(anchors_path.name + ".part").exists()
+
+    # a second separation per tier-A song, into out/bench/calib/<name>/
+    for e in _CALIB_ENTRIES:
+        assert (tmp_path / "out" / "bench" / "calib" / e["name"] / "piano.wav").exists()
+        assert (tmp_path / "out" / "stems" / e["name"] / "piano.wav").exists()
+
+
+def test_calibrate_leaves_degenerate_or_flipped_anchors_and_warns(tmp_path, monkeypatch):
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    run, _ = _fake_run()
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        is_ceiling = "calib" in Path(est_path).parts
+        # "chroma": ceiling == floor (degenerate); "onset_f1": measured
+        # direction (ceiling < floor) flips the anchor's stored direction
+        # (ceiling > floor, higher is better)
+        return {"chroma": 0.7, "onset_f1": 0.2 if is_ceiling else 0.8}
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {"pitched": {
+        "chroma": {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"},
+        "onset_f1": {"floor": 0.0, "ceiling": 0.9, "weight": 1, "axis": "what"},
+        "mert": {"floor": 0.6, "ceiling": 0.97, "weight": 1, "axis": "sound"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    new = json.loads(anchors_path.read_text())
+    assert new["pitched"]["chroma"] == {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"}
+    assert new["pitched"]["onset_f1"] == {"floor": 0.0, "ceiling": 0.9, "weight": 1, "axis": "what"}
+    assert new["pitched"]["mert"] == {"floor": 0.6, "ceiling": 0.97, "weight": 1, "axis": "sound"}
+
+    warnings = res["warnings"]
+    assert any("pitched.chroma" in w and "degenerate" in w for w in warnings)
+    assert any("pitched.onset_f1" in w and "flip" in w for w in warnings)
+    assert any("pitched.mert" in w and "not enough data" in w for w in warnings)
+    assert res["ceilings"]["pitched"]["mert"] is None and res["floors"]["pitched"]["mert"] is None
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
-def test_cli_bench_calibrate_prints_not_yet(capsys):
+def test_cli_bench_calibrate_calls_calibrate_and_prints_a_summary(tmp_path, monkeypatch, capsys):
     from soundcode import cli
+
+    seen = {}
+
+    def fake_calibrate(root, run=subprocess.run, anchors_path=None):
+        seen["root"] = root
+        return {"anchors": {"pitched": {"note_f1": {"floor": 0.1, "ceiling": 0.9}}},
+                "warnings": ["pitched.chroma: degenerate, keeping the existing anchor"],
+                "ceilings": {"pitched": {"note_f1": 0.9}},
+                "floors": {"pitched": {"note_f1": 0.1}}}
+
+    monkeypatch.setattr(bench, "calibrate", fake_calibrate)
+    monkeypatch.chdir(tmp_path)
     assert cli.main(["bench", "--calibrate"]) == 0
-    assert "not yet" in capsys.readouterr().out
+    assert seen["root"] == Path(".")
+    out = capsys.readouterr().out
+    assert "pitched.note_f1: floor=0.1 ceiling=0.9" in out
+    assert "degenerate" in out
+    assert str(bench.anchors.ANCHORS_PATH) in out
 
 
 def test_cli_bench_dispatches_to_run_bench(tmp_path, monkeypatch):
