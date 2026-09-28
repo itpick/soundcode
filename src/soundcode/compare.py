@@ -37,7 +37,8 @@ def _silent(y: np.ndarray) -> bool:
     return lv is None or lv < _SILENT_DB
 
 
-def note_f1(ref_iv, ref_hz, est_iv, est_hz, octave_agnostic: bool = False) -> float | None:
+def note_f1(ref_iv, ref_hz, est_iv, est_hz, octave_agnostic: bool = False,
+            onset_tolerance: float = 0.05, pitch_tolerance: float = 50.0) -> float | None:
     import mir_eval
 
     if len(ref_iv) == 0 and len(est_iv) == 0:
@@ -50,7 +51,7 @@ def note_f1(ref_iv, ref_hz, est_iv, est_hz, octave_agnostic: bool = False) -> fl
         ref_hz, est_hz = fold(ref_hz), fold(est_hz)
     return float(mir_eval.transcription.precision_recall_f1_overlap(
         np.asarray(ref_iv, float), ref_hz, np.asarray(est_iv, float), est_hz,
-        onset_tolerance=0.05, pitch_tolerance=50.0, offset_ratio=None)[2])
+        onset_tolerance=onset_tolerance, pitch_tolerance=pitch_tolerance, offset_ratio=None)[2])
 
 
 def chroma_blocks(y_ref, y_est, blocks) -> list[float | None]:
