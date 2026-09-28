@@ -160,8 +160,10 @@ def render_streams(doc: Document, sr: int | None = None,
     out: dict[str, np.ndarray] = {}
     for name, stream_notes in by_stream.items():
         target = gm.target_for(name, stream_notes[0].inst)
-        y = _synth_stream(stream_events(stream_notes, target), target, sfpath, sr, n)
         s = doc.stream(name)
+        y = _drums_from_kit(doc, s, stream_notes, target, sfpath, sr, n)
+        if y is None:
+            y = _synth_stream(stream_events(stream_notes, target), target, sfpath, sr, n)
         if not no_fx:
             from .fx import apply as apply_fx, parse_fx
             f = parse_fx(s)
@@ -174,6 +176,28 @@ def render_streams(doc: Document, sr: int | None = None,
                 y *= 10 ** ((float(level.rstrip("dB")) - have) / 20)
         out[name] = y
     return out
+
+
+def _drums_from_kit(doc, s, stream_notes, target, sfpath, sr: int, n: int):
+    """A perc stream with `meta kit` plays the song's own one-shots; voices the
+    kit lacks fall back to the General MIDI kit. None = no kit, render as usual."""
+    if s is None or s.kind != "perc" or not s.meta.get("kit"):
+        return None
+    kit_dir = Path(s.meta["kit"])
+    if not kit_dir.is_absolute() and getattr(doc, "path", None):
+        kit_dir = Path(doc.path).parent / kit_dir
+    if not kit_dir.is_dir():
+        s.warns.append(f"drum kit {kit_dir} not found; General MIDI kit used")
+        return None
+    from . import kit as kitmod
+
+    hits = [(x.start, x.voice or "", x.vel) for x in stream_notes]
+    y, missing = kitmod.play(hits, kitmod.load(kit_dir, sr), n, sr)
+    missing = set(missing)
+    rest = [x for x in stream_notes if (x.start, x.voice or "", x.vel) in missing]
+    if rest:
+        y = y + _synth_stream(stream_events(rest, target), target, sfpath, sr, n)
+    return y
 
 
 def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,

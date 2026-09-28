@@ -85,6 +85,7 @@ class Document:
     pragmas: dict[str, str] = field(default_factory=dict)
     header: dict[str, str] = field(default_factory=dict)
     streams: list[Stream] = field(default_factory=list)
+    path: Any = None                 # where it was read from (parse_file), for relative refs
 
     def stream(self, name: str) -> Stream | None:
         for s in self.streams:

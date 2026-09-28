@@ -292,5 +292,9 @@ def _absorb_decl(stream: Stream, toks: list[str]) -> None:
 
 
 def parse_file(path: str) -> Document:
+    from pathlib import Path
+
     with open(path, encoding="utf-8") as fh:
-        return parse(fh.read())
+        doc = parse(fh.read())
+    doc.path = Path(path)
+    return doc
