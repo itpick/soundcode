@@ -126,12 +126,21 @@ def _fake_run(root):
     return run, calls
 
 
+def _stems(root, slug):
+    """A minimal stems dir satisfying build()'s separated-stems prerequisite (task 1)."""
+    d = root / "out" / "stems" / slug
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "placeholder.wav").write_bytes(b"RIFF")          # name not in PART_KEYS: export_parts ignores it
+    return d
+
+
 def test_build_writes_data_and_media(tmp_path, monkeypatch):
     import json
     root = tmp_path
     (root / "audio" / "test").mkdir(parents=True)
     song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
     (root / song["clip"]).write_bytes(b"x" * 480_000)
+    _stems(root, song["slug"])
     monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
     run, calls = _fake_run(root)
     data = site.build(root, root / "site", root / "work", run=run, songs=[song])
@@ -156,6 +165,7 @@ def test_a_failed_song_names_itself_and_keeps_the_old_data(tmp_path, monkeypatch
     (root / "audio" / "test").mkdir(parents=True)
     song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
     (root / song["clip"]).write_bytes(b"x")
+    _stems(root, song["slug"])
     (root / "site").mkdir()
     (root / "site" / "data.json").write_text('{"old": true}')
 
@@ -175,6 +185,8 @@ def test_partial_failure_preserves_existing_media_and_data(tmp_path, monkeypatch
     song2 = {"slug": "lights-30s", "title": "Lights", "clip": "audio/test/lights-30s.mp3"}
     (root / song1["clip"]).write_bytes(b"x" * 480_000)
     (root / song2["clip"]).write_bytes(b"y" * 480_000)
+    _stems(root, song1["slug"])
+    _stems(root, song2["slug"])
 
     # Create existing site with song1's media
     (root / "site" / "media").mkdir(parents=True)
@@ -218,6 +230,8 @@ def test_build_with_subset_replaces_entire_site(tmp_path, monkeypatch):
     song2 = {"slug": "lights-30s", "title": "Lights", "clip": "audio/test/lights-30s.mp3"}
     (root / song1["clip"]).write_bytes(b"x" * 480_000)
     (root / song2["clip"]).write_bytes(b"y" * 480_000)
+    _stems(root, song1["slug"])
+    _stems(root, song2["slug"])
 
     monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
     run, calls = _fake_run(root)
@@ -263,6 +277,13 @@ def test_page_reads_data_json_safely():
     assert "pointerdown" in html and 'seek.addEventListener("change"' in html
     assert "activeElement" not in html
     assert 'seek.addEventListener("blur"' in html               # Tab away never leaves it "dragging"
+    # Task 6: the file:// fallback message only when opened as file:; another
+    # failure (e.g. a 404 on a real server) gets its own status/error message.
+    assert "location.protocol" in html
+    assert "Could not load data.json" in html
+    # Task 7: the kit is not shipped -- say so next to the download, only when sizes.kit > 0.
+    assert "Drum kit (hits cut from the recording) not included" in html
+    assert "sizes.kit" in html
 
 
 def test_build_lists_parts_from_both_sides(tmp_path, monkeypatch):
@@ -323,3 +344,105 @@ def test_an_unreadable_stem_names_its_song(tmp_path, monkeypatch):
         site.build(root, root / "site", root / "work", run=run, songs=[song])
     assert json.loads((root / "site" / "data.json").read_text()) == {"old": True}
     assert not (root / "site" / ".media.part").exists()
+
+
+def test_missing_stems_fails_before_encoding_and_names_the_command(tmp_path):
+    """Task 1: build() needs out/stems/<slug>/ (from `soundcode separate`); encode
+    alone does not create it. A fresh checkout must fail loudly, not silently
+    ship an instrumental with every original part null."""
+    import json
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    (root / "site").mkdir()
+    (root / "site" / "data.json").write_text('{"old": true}')
+    run, calls = _fake_run(root)
+    with pytest.raises(RuntimeError, match=r"discipline-30s: no separated stems in .*"
+                                            r"; run: soundcode separate audio/test/discipline-30s\.mp3"):
+        site.build(root, root / "site", root / "work", run=run, songs=[song])
+    assert not calls                                          # never reached encode
+    assert json.loads((root / "site" / "data.json").read_text()) == {"old": True}
+    assert not (root / "site" / ".media.part").exists()
+
+
+def test_an_empty_stems_dir_also_fails(tmp_path):
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    (root / "out" / "stems" / "discipline-30s").mkdir(parents=True)   # dir exists, no *.wav
+    run, calls = _fake_run(root)
+    with pytest.raises(RuntimeError, match="no separated stems"):
+        site.build(root, root / "site", root / "work", run=run, songs=[song])
+
+
+def test_instrumental_lead_vocals_part_is_labelled_choir_not_vocals(tmp_path, monkeypatch):
+    """Task 2: an instrumental's rebuild lead_vocals part is a voice.choir GM
+    line (meta stem), not an actual singer -- it must not read "Vocals"."""
+    p = tmp_path / "t.sc"
+    p.write_text(SC)
+    clip = tmp_path / "clip.mp3"
+    clip.write_bytes(b"x" * 100)
+    monkeypatch.setattr(site, "_frames", lambda c: 44100)
+    parts = [{"key": "lead_vocals", "label": "Vocals", "original": None,
+              "rebuild": "media/t/rebuild-lead_vocals.mp3"}]
+
+    instrumental = site.song_entry({"slug": "t", "title": "T"}, p, clip, None, {}, parts)
+    assert instrumental["parts"][0]["label"] == "Choir / pad (vocal stem)"
+
+    sung = site.song_entry({"slug": "t", "title": "T"}, p, clip, "soulx", {}, parts)
+    assert sung["parts"][0]["label"] == "Vocals"                 # unchanged when actually sung
+    assert parts[0]["label"] == "Vocals"                         # the input list is not mutated
+
+
+def test_export_parts_notes_explain_a_missing_side(tmp_path):
+    """Task 3: per-part, per-side reasons for a disabled chip -- 'silent in the
+    original' (stem exists, gated out) is distinct from 'not separated'
+    (stem never existed); a missing rebuild is 'not in the rebuild'."""
+    import numpy as np
+    import soundfile as sf
+    stems = tmp_path / "stems"
+    stems.mkdir()
+    parts_dir = tmp_path / "parts"
+    parts_dir.mkdir()
+    staging = tmp_path / "staging"
+    sf.write(str(stems / "piano.wav"), np.full((1000, 2), 0.1, np.float32), 44100)    # loud: kept
+    sf.write(str(stems / "drums.wav"), np.zeros((1000, 2), np.float32), 44100)         # silent: gated
+    sf.write(str(parts_dir / "drums.wav"), np.full((1000, 2), 0.1, np.float32), 44100)
+    sf.write(str(parts_dir / "guitar.wav"), np.full((1000, 2), 0.1, np.float32), 44100)  # no stem at all
+
+    run, _ = _fake_run(tmp_path)
+    result = site.export_parts(run, "t", stems, parts_dir, staging)
+    by = {p["key"]: p for p in result}
+
+    assert by["piano"]["original"] is not None and by["piano"]["original_note"] is None
+    assert by["piano"]["rebuild"] is None and by["piano"]["rebuild_note"] == "not in the rebuild"
+
+    assert by["drums"]["original"] is None
+    assert by["drums"]["original_note"] == "silent in the original"
+    assert by["drums"]["rebuild"] is not None and by["drums"]["rebuild_note"] is None
+
+    assert by["guitar"]["original"] is None
+    assert by["guitar"]["original_note"] == "not separated"
+    assert by["guitar"]["rebuild"] is not None
+
+
+def test_missing_render_log_forces_a_rerender(tmp_path, monkeypatch):
+    """Task 4: singer_from_log() falls back to the default singer when the log
+    is missing -- a cached wav with a deleted log must not be trusted; force
+    a re-render instead of misreporting the singer."""
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    _stems(root, song["slug"])
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+    run, calls = _fake_run(root)
+
+    site.build(root, root / "site", root / "work", run=run, songs=[song])
+    (root / "work" / "discipline-30s.render.log").unlink()        # log gone, wav + parts kept
+
+    n = len(calls)
+    site.build(root, root / "site", root / "work", run=run, songs=[song])
+    assert any("render" in c for c in calls[n:])

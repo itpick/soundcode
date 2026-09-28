@@ -132,19 +132,25 @@ def export_parts(run, slug: str, stems_dir: Path, parts_dir: Path, staging: Path
     out.mkdir(parents=True, exist_ok=True)
     entries = []
     for key in PART_KEYS:
-        entry = {"key": key, "label": PART_LABELS[key], "original": None, "rebuild": None}
+        entry = {"key": key, "label": PART_LABELS[key], "original": None, "rebuild": None,
+                 "original_note": None, "rebuild_note": None}
         stem = stems_dir / f"{key}.wav"
+        exists = stem.is_file()
         try:
-            loud = stem.is_file() and _peak(stem) >= PART_GATE
+            loud = exists and _peak(stem) >= PART_GATE
         except Exception as exc:                        # noqa: BLE001 — unreadable stem: name the song
             raise RuntimeError(f"{slug}: could not read the {key} stem {stem} ({exc})") from exc
         if loud:
             _mp3(run, stem, out / f"original-{key}.mp3", slug, gain=ORIGINAL_PART_GAIN)
             entry["original"] = f"media/{slug}/original-{key}.mp3"
+        else:
+            entry["original_note"] = "silent in the original" if exists else "not separated"
         part = parts_dir / f"{key}.wav"
         if part.is_file():
             _mp3(run, part, out / f"rebuild-{key}.mp3", slug)
             entry["rebuild"] = f"media/{slug}/rebuild-{key}.mp3"
+        else:
+            entry["rebuild_note"] = "not in the rebuild"
         if entry["original"] or entry["rebuild"]:
             entries.append(entry)
     return entries
@@ -164,9 +170,16 @@ def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media:
     w = sizes["wav"]
     ratios = {"mp3": round(w / sizes["mp3"]), "sc": round(w / raw), "sc_gz": round(w / gz),
               "with_borrowed": round(w / (gz + sizes["kit"] + sizes["voice"]))}
+    parts_out = []
+    for p in (parts or []):
+        # An unsung song's rebuild "lead_vocals" part is a voice.choir GM line
+        # (meta stem), not an actual singer -- "Vocals" would mislabel it.
+        if singer is None and p["key"] == "lead_vocals" and p.get("rebuild") is not None:
+            p = {**p, "label": "Choir / pad (vocal stem)"}
+        parts_out.append(p)
     return {"slug": song["slug"], "title": song["title"], "artist": ARTIST, **media,
             "sizes": sizes, "ratios": ratios, "singer": singer, "summary": summary(doc),
-            "parts": parts or []}
+            "parts": parts_out}
 
 
 def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: bool = False,
@@ -198,15 +211,20 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
     env = {**os.environ, "SOUNDCODE_SEEDVC_HOST": os.environ.get("SOUNDCODE_SEEDVC_HOST", "framepick")}
     cli = [sys.executable, "-m", "soundcode.cli"]
     entries = []
+    from .separate import default_out_dir
     try:
         for song in songs:
             slug, clip = song["slug"], root / song["clip"]
+            stems_dir = root / default_out_dir(clip)
+            if not stems_dir.is_dir() or not any(stems_dir.glob("*.wav")):
+                raise RuntimeError(f"{slug}: no separated stems in {stems_dir}; "
+                                    f"run: soundcode separate {song['clip']}")
             sc, wav, log = work / f"{slug}.sc", work / f"{slug}.wav", work / f"{slug}.render.log"
             if _stale(sc, clip, force):
                 _check(run([*cli, "encode", str(clip), "--title", song["title"], "--artist", ARTIST, "-o", str(sc)],
                            capture_output=True, text=True, env=env, cwd=root), slug, "encode")
             parts_dir = work / f"{slug}.parts"
-            if _stale(wav, sc, force) or not parts_dir.is_dir():
+            if _stale(wav, sc, force) or not parts_dir.is_dir() or not log.exists():
                 if parts_dir.exists():
                     shutil.rmtree(parts_dir)            # no part left over from an older render
                 proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav),
@@ -220,8 +238,7 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
             shutil.copyfile(clip, media_staging / f"{slug}-original.mp3")
             shutil.copyfile(sc, media_staging / f"{slug}.sc")
             _mp3(run, wav, media_staging / f"{slug}-rebuild.mp3", slug, bitrate="192k")
-            from .separate import default_out_dir
-            parts = export_parts(run, slug, root / default_out_dir(clip), parts_dir, media_staging)
+            parts = export_parts(run, slug, stems_dir, parts_dir, media_staging)
             entries.append(song_entry(song, sc, clip, singer, names, parts))
         tot = {k: sum(e["sizes"][k] for e in entries) for k in ("wav", "mp3", "sc", "sc_gz")}
         tot["borrowed"] = sum(e["sizes"]["kit"] + e["sizes"]["voice"] for e in entries)
