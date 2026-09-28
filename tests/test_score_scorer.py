@@ -46,6 +46,36 @@ def test_anchors_json_has_every_part_type_and_lower_is_better_pairs():
     assert anchors.ANCHORS["mix"]["lufs_diff_abs"]["axis"] == "dyn"
 
 
+# Exact metric-name set per part type, from the spec's "Metrics per part"
+# table (docs/superpowers/specs/2026-09-28-benchmark-scorer-design.md),
+# plus `lag_ms_abs` (What, every part — "the lag per 20 s window" applies
+# on every part) and the low-weight `spectral_db` guard (Sound, 0.1) where
+# that part already carries a Sound metric it could self-optimise against.
+# Pinned here so `anchors.json` can't silently drift from the spec table.
+EXPECTED_METRIC_NAMES = {
+    "pitched": {"note_f1", "chroma", "onset_f1", "lag_ms_abs",
+                "mert", "logspec_db", "spectral_db",
+                "env_corr", "level_diff_db_abs"},
+    "bass": {"onset_f1", "f0_cents", "chroma", "lag_ms_abs",
+             "mert", "logspec_db", "spectral_db",
+             "env_corr", "level_diff_db_abs"},
+    "drums": {"onset_f1", "drum_voice_f1", "lag_ms_abs",
+              "mert", "decay_ratio_err", "spectral_db",
+              "env_corr"},
+    "vocal": {"f0_cents", "word_mae_s", "sung_wer_excess", "lag_ms_abs",
+              "voice_sim", "mert", "spectral_db",
+              "env_corr", "level_diff_db_abs"},
+    "mix": {"chroma", "onset_f1", "lag_ms_abs",
+            "mert", "width_diff", "spectral_db",
+            "lufs_diff_abs"},
+}
+
+
+def test_anchors_json_metric_names_match_the_spec_table_exactly():
+    for part_type, expected in EXPECTED_METRIC_NAMES.items():
+        assert set(anchors.ANCHORS[part_type].keys()) == expected, part_type
+
+
 # --- scorer.score_slice ---------------------------------------------------
 
 
@@ -171,7 +201,7 @@ def _part(score):
 def test_song_score_missing_active_part_counts_as_zero():
     parts = {"piano": _part(100.0), "bass": scorer.score_part({}, [], [], "bass", missing=True)}
     energy = {"piano": 0.5, "bass": 0.5}
-    got = scorer.song_score(parts, energy, mix=100.0)
+    got = scorer.song_score(parts, energy, mix=_part(100.0))
     # bass counts as 0 but still carries its energy weight -> pulls the mean down
     parts_mean = 0.5 * 100.0 + 0.5 * 0.0
     assert got == pytest.approx(0.5 * parts_mean + 0.5 * 100.0)
@@ -180,7 +210,7 @@ def test_song_score_missing_active_part_counts_as_zero():
 def test_song_score_silent_part_is_excluded_not_zeroed():
     parts = {"piano": _part(100.0), "bass": scorer.score_part({}, [], [], "bass", silent=True)}
     energy = {"piano": 0.5, "bass": 0.5}
-    got = scorer.song_score(parts, energy, mix=100.0)
+    got = scorer.song_score(parts, energy, mix=_part(100.0))
     # bass is silent -> excluded entirely; piano alone (renormalised) carries the part half
     assert got == pytest.approx(0.5 * 100.0 + 0.5 * 100.0)
 
@@ -189,15 +219,15 @@ def test_song_score_missing_vs_silent_differ():
     energy = {"piano": 0.5, "bass": 0.5}
     missing_parts = {"piano": _part(100.0), "bass": scorer.score_part({}, [], [], "bass", missing=True)}
     silent_parts = {"piano": _part(100.0), "bass": scorer.score_part({}, [], [], "bass", silent=True)}
-    missing_score = scorer.song_score(missing_parts, energy, mix=100.0)
-    silent_score = scorer.song_score(silent_parts, energy, mix=100.0)
+    missing_score = scorer.song_score(missing_parts, energy, mix=_part(100.0))
+    silent_score = scorer.song_score(silent_parts, energy, mix=_part(100.0))
     assert missing_score < silent_score
 
 
 def test_song_score_blends_50_50_with_mix():
     parts = {"piano": _part(80.0)}
     energy = {"piano": 1.0}
-    assert scorer.song_score(parts, energy, mix=40.0) == pytest.approx(60.0)
+    assert scorer.song_score(parts, energy, mix=_part(40.0)) == pytest.approx(60.0)
 
 
 def test_song_score_accepts_a_score_part_shaped_mix():
@@ -205,6 +235,55 @@ def test_song_score_accepts_a_score_part_shaped_mix():
     energy = {"piano": 1.0}
     mix = _part(40.0)
     assert scorer.song_score(parts, energy, mix=mix) == pytest.approx(60.0)
+
+
+def test_song_score_rejects_a_bare_number_as_mix():
+    parts = {"piano": _part(80.0)}
+    energy = {"piano": 1.0}
+    with pytest.raises(ValueError):
+        scorer.song_score(parts, energy, mix=40.0)
+
+
+def test_song_score_rejects_an_unrecognised_mix_shape():
+    parts = {"piano": _part(80.0)}
+    energy = {"piano": 1.0}
+    with pytest.raises(ValueError):
+        scorer.song_score(parts, energy, mix={"score": 40.0})   # missing "song" key
+
+
+def test_song_score_all_parts_silent_comes_from_mix_alone():
+    parts = {"piano": scorer.score_part({}, [], [], "pitched", silent=True),
+              "bass": scorer.score_part({}, [], [], "bass", silent=True)}
+    energy = {"piano": 0.5, "bass": 0.5}
+    assert scorer.song_score(parts, energy, mix=_part(73.0)) == pytest.approx(73.0)
+
+
+def test_song_score_all_parts_silent_and_no_mix_is_none():
+    parts = {"piano": scorer.score_part({}, [], [], "pitched", silent=True)}
+    energy = {"piano": 1.0}
+    assert scorer.song_score(parts, energy, mix=None) is None
+
+
+def test_song_score_energy_shares_summing_to_zero_falls_back_to_mix():
+    # non-silent parts, but every energy share is 0 -> no weight to average
+    # over on the parts side, so the song score is the mix score alone.
+    parts = {"piano": _part(10.0), "bass": _part(20.0)}
+    energy = {"piano": 0.0, "bass": 0.0}
+    assert scorer.song_score(parts, energy, mix=_part(66.0)) == pytest.approx(66.0)
+
+
+def test_song_score_a_part_with_a_none_song_score_counts_as_zero():
+    # not missing, not silent, but its own song score is None (e.g. every
+    # metric came back None) -> counts as 0, same treatment as "missing",
+    # and still keeps its energy weight.
+    none_scored = {"song": {"axes": {}, "score": None, "metrics": {}},
+                    "sections": [], "windows": [], "worst": None,
+                    "missing": False, "silent": False}
+    parts = {"piano": _part(100.0), "bass": none_scored}
+    energy = {"piano": 0.5, "bass": 0.5}
+    got = scorer.song_score(parts, energy, mix=_part(100.0))
+    parts_mean = 0.5 * 100.0 + 0.5 * 0.0
+    assert got == pytest.approx(0.5 * parts_mean + 0.5 * 100.0)
 
 
 # --- named constants -----------------------------------------------------

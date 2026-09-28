@@ -119,20 +119,46 @@ def score_part(
 
 
 def _mix_score(mix) -> float | None:
-    """Accept either a plain score, or a `score_part`-shaped dict (its
-    `song.score`), since the mix is scored the same way as any other part."""
-    if isinstance(mix, dict):
-        song = mix.get("song")
-        return song.get("score") if song else None
-    return mix
+    """The mix's score, from a `score_part`-shaped dict (its `song.score`,
+    or `None` if the mix itself came back `silent`) — the mix is scored the
+    same way as any other part, via `score_part(..., "mix")`, so this takes
+    the same shape `parts`' values do, not a bare number.
+
+    `mix=None` is accepted as "no mix score to blend in" (see `song_score`'s
+    fallback). Anything else that isn't a dict with a `song` key is a
+    caller bug, not a silent/missing mix, and raises rather than being
+    quietly treated as absent.
+    """
+    if mix is None:
+        return None
+    if not isinstance(mix, dict) or "song" not in mix:
+        raise ValueError(
+            "song_score's `mix` must be a score_part-shaped dict (with a "
+            f"'song' key) or None, not {mix!r}")
+    song = mix["song"]
+    return song["score"] if song is not None else None
 
 
 def song_score(parts: dict, energy: dict, mix) -> float | None:
     """The energy-share-weighted mean of the non-silent parts, blended 50/50
-    with the mix score. A missing active part counts as 0 but still keeps
-    its energy weight; a silent part is excluded entirely, including its
-    weight, so the remaining parts' shares are renormalised over what's
-    left. `None` if there is nothing to average on either side."""
+    with the mix score.
+
+    - A missing active part (`result["missing"]`) counts as 0 but still
+      keeps its energy weight, dragging the average down.
+    - A part that is neither missing nor silent but whose own song score is
+      `None` (e.g. every one of its metrics came back `None`) is treated
+      the same way: it counts as 0 while keeping its weight. Only
+      `silent` opts a part out of the average entirely.
+    - A silent part is excluded, including its weight, so the remaining
+      parts' shares are implicitly renormalised over what's left.
+    - If there is no weight left to average over on the parts side (no
+      non-silent parts, or every non-silent part's energy share is 0), the
+      song score is the mix score alone.
+    - `mix` must be a `score_part`-shaped dict (see `_mix_score`) or
+      `None`; `None` means there is no mix score to blend in.
+    - `None` overall only when there is nothing to average on either side
+      (no usable parts weight AND no mix score).
+    """
     total = 0.0
     total_w = 0.0
     for name, result in parts.items():
