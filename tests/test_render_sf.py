@@ -325,3 +325,60 @@ def test_cli_render_parts_needs_the_sf2_engine(tmp_path, capsys):
     sc.write_text(SCALE_SC)
     assert cli.main(["render", str(sc), "--engine", "mock", "--parts", str(tmp_path / "p")]) == 2
     assert "--parts" in capsys.readouterr().err
+
+
+# --- SoulX misleading warnings (spec 2026-09-28-benchmark-scorer, Task 6) ------------------
+
+VOCAL_SC = """%sc 0.3
+@duration 4.0
+
+:grid
+meter @0.000 4/4
+anchor bar 1 @0.000
+tempo @0.000 120
+
+:notes.lead inst=voice.lead
+meta stem=lead_vocals
+1:1.000  C4  1.000b 90
+
+:text.vox
+1:1.000 "hello" 1.000b
+"""
+
+
+def _fake_with_vocals(monkeypatch, warns, singer):
+    from soundcode import sing
+    doc = parse(VOCAL_SC)
+    keys = np.zeros((44100 * 5, 2), np.float32)
+    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None, **k: {"notes.lead": keys})
+    monkeypatch.setattr(sing, "sing", lambda d, ref=None, **k: (None, warns))
+    monkeypatch.setattr(render_sf, "_load_stream", lambda *a, **k: keys)
+    return doc
+
+
+def test_soulx_drops_the_no_room_heuristic_warning(monkeypatch, capsys):
+    warns = ["dropped 'river' (no room)", "dropped 2 word(s) past the end of the song: a b",
+             "no dictionary entry for 'zzz': letter guess"]
+    doc = _fake_with_vocals(monkeypatch, warns, "soulx")
+    render_sf.render(doc, 44100, with_vocals=True, singer="soulx")
+    err = capsys.readouterr().err
+    assert "no room" not in err
+    assert "past the end" in err
+    assert "letter guess" in err
+
+
+def test_soulx_is_the_default_singer_so_the_default_also_drops_it(monkeypatch, capsys):
+    warns = ["dropped 'river' (no room)"]
+    doc = _fake_with_vocals(monkeypatch, warns, None)
+    render_sf.render(doc, 44100, with_vocals=True)          # no --singer: defaults to soulx
+    err = capsys.readouterr().err
+    assert "no room" not in err
+
+
+def test_diffsinger_keeps_the_no_room_warning(monkeypatch, capsys):
+    warns = ["dropped 'river' (no room)", "dropped 2 word(s) past the end of the song: a b"]
+    doc = _fake_with_vocals(monkeypatch, warns, "diffsinger")
+    render_sf.render(doc, 44100, with_vocals=True, singer="diffsinger")
+    err = capsys.readouterr().err
+    assert "no room" in err
+    assert "past the end" in err

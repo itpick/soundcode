@@ -119,6 +119,19 @@ def main(argv: list[str] | None = None) -> int:
     p_encode.add_argument("--offset", type=float, default=None,
                           help="where this clip starts in the full song, seconds (default: found from the lyrics)")
 
+    p_score = sub.add_parser("score", help="score a rebuild against the original, per part/section")
+    p_score.add_argument("original")
+    p_score.add_argument("sc")
+    p_score.add_argument("--stems", default=None, help="default out/stems/<original stem>")
+    p_score.add_argument("--out", default=None, help="default out/score/<sc stem>")
+
+    p_bench = sub.add_parser("bench", help="run the benchmark set and update the run history")
+    p_bench.add_argument("--tier", choices=("A", "B", "C", "all"), default="A")
+    p_bench.add_argument("--label", default="")
+    p_bench.add_argument("--force", action="store_true")
+    p_bench.add_argument("--calibrate", action="store_true",
+                         help="re-measure the anchors (not yet implemented)")
+
     p_serve = sub.add_parser("serve", help="local A/B listening server")
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8720)
@@ -238,6 +251,53 @@ def main(argv: list[str] | None = None) -> int:
 
             out = args.out or str(Path(args.file).with_suffix(".sc"))
             encode(args.file, out, args.workdir, args.title, args.artist, args.offset)
+            return 0
+
+        if args.cmd == "score":
+            from . import render_sf
+            from .score import report as score_report
+            from .score import scorer
+
+            sc_path, original = Path(args.sc), Path(args.original)
+            stems_dir = Path(args.stems) if args.stems else Path("out") / "stems" / original.stem
+            out_dir = Path(args.out) if args.out else Path("out") / "score" / sc_path.stem
+            parts_dir, rebuild = out_dir / "parts", out_dir / "rebuild.wav"
+
+            doc = parse_file(str(sc_path))
+            cached = (rebuild.exists() and parts_dir.is_dir() and any(parts_dir.glob("*.wav"))
+                     and rebuild.stat().st_mtime >= sc_path.stat().st_mtime)
+            if not cached:
+                import numpy as np
+                import soundfile as sf
+
+                from .sing_score import SingError
+                try:
+                    sr = doc.sample_rate
+                    audio, parts = render_sf.render_parts(doc, sr, with_vocals=True)
+                except (render_sf.SoundFontError, SingError) as exc:
+                    print(f"score failed: {exc}", file=sys.stderr)
+                    return 2
+                out_dir.mkdir(parents=True, exist_ok=True)
+                sf.write(str(rebuild), audio, sr, subtype="PCM_16")
+                parts_dir.mkdir(parents=True, exist_ok=True)
+                for key, y in parts.items():
+                    if float(np.abs(y).max()) > 1e-4:
+                        sf.write(str(parts_dir / f"{key}.wav"), y, sr, subtype="PCM_16")
+
+            result = scorer.score_song(original, stems_dir, sc_path, parts_dir, rebuild, out_dir)
+            print(score_report.table(result))
+            report_path = score_report.html(result, out_dir)
+            print(f"report: {report_path}")
+            return 0
+
+        if args.cmd == "bench":
+            if args.calibrate:
+                print("not yet")
+                return 0
+            from .score import bench
+
+            res = bench.run_bench(args.tier, args.label, Path("."), force=args.force)
+            print(f"run: {res['run_dir']}")
             return 0
 
         if args.cmd == "serve":

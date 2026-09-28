@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,12 @@ from .model import Document
 
 BEND_RANGE_SEMITONES = 2
 _ORDER = {"off": 0, "bend": 1, "on": 2}
+
+# sing_score's heuristic word-squeeze warning: SoulX aligns from the mix's
+# own timing (not this note-driven schedule), so it never actually drops
+# these words -- the warning is a false alarm for that singer only. "past
+# the end" and every other warning still applies to SoulX renders.
+_NO_ROOM_WARNING = re.compile(r"^dropped '.*' \(no room\)$")
 
 
 @dataclass(frozen=True, order=True)
@@ -287,7 +294,10 @@ def _streams(doc: Document, sr: int, sf2: Path | None, with_vocals: bool,
         except NoVocalError as exc:
             print(f"with-vocals: {exc}; rendering instruments only", file=sys.stderr)
             return streams
+        effective_singer = singer or sing.DEFAULT_SINGER
         for w in warns:
+            if effective_singer == "soulx" and _NO_ROOM_WARNING.match(w):
+                continue
             print(f"with-vocals: {w}", file=sys.stderr)
         streams[name] = _load_stream(wav, sr, max((y.shape[0] for y in streams.values()), default=0),
                                      doc.stream(name), no_fx=no_fx)
