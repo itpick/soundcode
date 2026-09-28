@@ -43,8 +43,9 @@ def render(score: Score, mode: str = "01CORE", steps: int = 20, depth: float = 0
     b = bank_dir()
     ids = json.loads((b / "dsmain" / "phonemes.json").read_text())
     missing = sorted({p for p in score.phonemes if p not in ids})
-    if missing:
-        raise SingError(f"bank has no phonemes {missing}")
+    if missing:                    # never let one odd word cost the whole vocal
+        score.warnings.append(f"bank has no phonemes {missing}; sung as 'ah'")
+        score.phonemes = [p if p in ids else "en/ah" for p in score.phonemes]
     nf = score.n_frames
     tokens = np.array([[ids[p] for p in score.phonemes]], dtype=np.int64)
     langs = np.array([[1 if p.startswith("en/") else 0 for p in score.phonemes]], dtype=np.int64)

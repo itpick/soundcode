@@ -172,9 +172,14 @@ def main(argv: list[str] | None = None) -> int:
             from . import compare as cmp
 
             out = args.out or str(Path("out") / "compare" / Path(args.original).stem)
-            rep = cmp.run(args.original, args.render, out, engine=args.engine,
-                          with_vocals=args.with_vocals,
-                          voice_ref=Path(args.voice_ref) if args.voice_ref else None)
+            from .sing_score import SingError
+            try:
+                rep = cmp.run(args.original, args.render, out, engine=args.engine,
+                              with_vocals=args.with_vocals,
+                              voice_ref=Path(args.voice_ref) if args.voice_ref else None)
+            except SingError as exc:
+                print(f"compare failed: {exc}", file=sys.stderr)
+                return 2
             f = cmp._fmt
             print(f"{'stem':<15}{'orig dB':>8}{'rend dB':>8}{'Δ dB':>7}{'noteF1':>8}"
                   f"{'anyOct':>8}{'chroma':>8}{'onsetF1':>8}{'energy':>8}")

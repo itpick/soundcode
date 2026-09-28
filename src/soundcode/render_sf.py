@@ -212,10 +212,18 @@ def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
     sr = sr or doc.sample_rate
     streams = render_streams(doc, sr, sf2, no_fx=no_fx)
     if with_vocals:
+        import sys
+
         from . import sing
-        from .sing_score import vocal_stream
-        name = vocal_stream(doc)
-        wav, _ = sing.sing(doc, voice_ref)
+        from .sing_score import NoVocalError, vocal_stream
+        try:
+            name = vocal_stream(doc)
+            wav, warns = sing.sing(doc, voice_ref)
+        except NoVocalError as exc:
+            print(f"with-vocals: {exc}; rendering instruments only", file=sys.stderr)
+            return mix(doc, streams, sr, with_vocals)
+        for w in warns:
+            print(f"with-vocals: {w}", file=sys.stderr)
         streams[name] = _load_stream(wav, sr, max((y.shape[0] for y in streams.values()), default=0),
                                      doc.stream(name))
     return mix(doc, streams, sr, with_vocals)

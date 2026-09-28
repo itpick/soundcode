@@ -34,7 +34,8 @@ def _stream_text(doc, name: str) -> str:
     s = doc.stream(name)
     if s is None:
         return ""
-    return json.dumps([s.fields, s.meta, s.statements, [e.raw for e in s.events]],
+    meta = {k: v for k, v in s.meta.items() if k != "level"}   # level is applied after, not sung
+    return json.dumps([s.fields, meta, s.statements, [e.raw for e in s.events]],
                       sort_keys=True, default=str)
 
 
@@ -44,7 +45,9 @@ def cache_key(doc, ref: Path, settings: dict) -> str:
         h.update(_stream_text(doc, name).encode())
     st = Path(ref).stat()
     h.update(f"{Path(ref).resolve()}|{st.st_mtime_ns}|{st.st_size}".encode())
-    h.update(json.dumps(settings, sort_keys=True).encode())
+    h.update(f"duration={doc.duration}".encode())
+    h.update(json.dumps({**settings, "ds_steps": 20, "ds_depth": 0.6, "vc": seedvc._FLAGS},
+                        sort_keys=True).encode())
     return h.hexdigest()[:16]
 
 
@@ -57,7 +60,13 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
     out = Path(cache) / f"{cache_key(doc, ref, settings)}.wav"
     score = ss.build(doc)
     if out.exists():
-        return out, score.warnings
+        try:
+            import soundfile as _sf
+            if _sf.info(str(out)).frames > 0:
+                return out, score.warnings
+        except Exception:                        # noqa: BLE001 — unreadable cache: redo it
+            pass
+        out.unlink(missing_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
     raw = out.with_suffix(".diffsinger.wav")
     sf.write(str(raw), diffsinger.render(score, mode=settings["mode"]), ss.SR)

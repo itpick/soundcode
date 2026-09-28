@@ -304,3 +304,101 @@ def test_compare_level_matches_the_sung_vocal(tmp_path):
     m = cmp.sung_stream(doc, wav, cmp.SR * 4)
     seg = m[:cmp.SR * 2]
     assert abs(20 * np.log10(np.sqrt(np.mean(seg.astype(np.float64) ** 2))) - (-30.0)) < 0.5
+
+
+# --- final-review fixes ------------------------------------------------------------------------
+
+SAFE = {"en/" + p for p in ("aa ae ah ao aw ax ay b ch d dh eh er ey f g hh ih iy jh k l m n ng "
+                             "ow oy p r s sh t th uh uw v w y z zh").split()}
+
+
+def test_letter_fallback_only_emits_bank_phonemes():
+    for w in ("cuz", "doncha", "jinx", "xq", "qwerty"):
+        ph, hit = ss.g2p(w)
+        assert set(ph) <= SAFE, (w, ph)
+
+
+def test_diffsinger_substitutes_unknown_phonemes_instead_of_dying(monkeypatch):
+    sc = ss.build(parse(SONG))
+    sc.phonemes[1] = "en/zzz"
+    if not _bank_present():
+        pytest.skip("no bank")
+    y = ds.render(sc)
+    assert np.abs(y).max() > 0.1 and any("zzz" in w for w in sc.warnings)
+
+
+def test_failed_remote_download_does_not_poison_the_cache(tmp_path, monkeypatch):
+    import subprocess
+    from soundcode import seedvc
+    monkeypatch.setenv("SOUNDCODE_SEEDVC_HOST", "gpubox")
+    (tmp_path / "s.wav").write_bytes(b"s"); (tmp_path / "r.wav").write_bytes(b"r")
+    out = tmp_path / "v.wav"
+    def fake_run(cmd, **kw):
+        if cmd[0] == "scp" and not cmd[-1].startswith("gpubox:"):
+            Path(cmd[-1]).write_bytes(b"trunc")
+            return subprocess.CompletedProcess(cmd, 1, "", "Connection closed")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(seedvc.subprocess, "run", fake_run)
+    with pytest.raises(ss.SingError):
+        seedvc.convert(tmp_path / "s.wav", tmp_path / "r.wav", out)
+    assert not out.exists()
+
+
+def test_timeouts_become_sing_errors_and_scp_is_batch(tmp_path, monkeypatch):
+    import subprocess
+    from soundcode import seedvc
+    monkeypatch.setenv("SOUNDCODE_SEEDVC_HOST", "gpubox")
+    (tmp_path / "s.wav").write_bytes(b"s"); (tmp_path / "r.wav").write_bytes(b"r")
+    seen = []
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        if cmd[0] == "scp":
+            assert "BatchMode=yes" in " ".join(cmd)
+        if cmd[0] == "ssh" and "inference.py" in cmd[-1]:
+            raise subprocess.TimeoutExpired(cmd, 1800)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+    monkeypatch.setattr(seedvc.subprocess, "run", fake_run)
+    with pytest.raises(ss.SingError, match="timed out"):
+        seedvc.convert(tmp_path / "s.wav", tmp_path / "r.wav", tmp_path / "v.wav")
+
+
+def test_no_vocal_song_renders_instruments_with_a_note(monkeypatch, capsys):
+    doc = parse("%sc 0.3\n@duration 2.0\n\n:notes.keys inst=keys.piano\n@0.0 C4 0.5s 100\n")
+    keys = np.full((44100 * 2, 2), 0.1, np.float32)
+    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None, **k: {"notes.keys": keys})
+    y = render_sf.render(doc, 44100, with_vocals=True)
+    assert np.abs(y).max() > 0 and "no lead vocal" in capsys.readouterr().err
+
+
+def test_notes_without_words_are_sung_on_ah():
+    sc = ss.build(parse(SONG.replace(' | 1:3.000 "river" 2.000b', "")))
+    t_end = np.cumsum(sc.frames) * ss.HOP / ss.SR
+    t_start = t_end - np.array(sc.frames) * ss.HOP / ss.SR
+    at = lambda t: sc.phonemes[int(np.searchsorted(t_end, t))]  # noqa: E731
+    assert at(1.5) in ("en/aa", "en/ah")                  # the E4 note, no word: sung "ah"
+    assert any("'ah'" in w for w in sc.warnings)
+
+
+def test_contour_line_boundaries_leave_no_note_pitch_frames():
+    vals = " ".join(["6030"] * 50)
+    doc = parse(SONG + f"\n:contour.vox rate=50\nf0  @0.000  {vals}\nf0  @1.000  " + " ".join(["6030"] * 10) + "\n")
+    sc = ss.build(doc)
+    t = (np.arange(sc.n_frames) + 0.5) * ss.HOP / ss.SR
+    seg = sc.f0_hz[(t > 0.02) & (t < 1.18)]
+    assert np.all(np.abs(1200 * np.log2(seg / 261.63) - 30) < 3)
+
+
+def test_cache_key_includes_duration_and_ignores_level(tmp_path):
+    ref = tmp_path / "r.wav"; ref.write_bytes(b"x")
+    k = sing.cache_key(parse(SONG), ref, {"steps": 30})
+    assert k != sing.cache_key(parse(SONG.replace("@duration 4.0", "@duration 8.0")), ref, {"steps": 30})
+    assert k == sing.cache_key(parse(SONG.replace("meta stem=lead_vocals", "meta stem=lead_vocals level=-30.0")), ref, {"steps": 30})
+
+
+def test_compare_with_vocals_errors_are_one_line(tmp_path, monkeypatch, capsys):
+    from soundcode import cli, compare as cmp
+    def boom(*a, **k):
+        raise ss.SingError("DiffSinger bank missing at /nope")
+    monkeypatch.setattr(cmp, "run", boom)
+    assert cli.main(["compare", "a.wav", "b.sc", "--with-vocals", "-o", str(tmp_path)]) == 2
+    assert "bank missing" in capsys.readouterr().err
