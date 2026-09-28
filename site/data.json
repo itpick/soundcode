@@ -42,49 +42,65 @@
      "key": "lead_vocals",
      "label": "Vocals",
      "original": "media/discipline-30s/original-lead_vocals.mp3",
-     "rebuild": "media/discipline-30s/rebuild-lead_vocals.mp3"
+     "rebuild": "media/discipline-30s/rebuild-lead_vocals.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "backing_vocals",
      "label": "Backing vocals",
      "original": "media/discipline-30s/original-backing_vocals.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "piano",
      "label": "Keys",
      "original": "media/discipline-30s/original-piano.mp3",
-     "rebuild": "media/discipline-30s/rebuild-piano.mp3"
+     "rebuild": "media/discipline-30s/rebuild-piano.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "guitar",
      "label": "Guitar",
      "original": "media/discipline-30s/original-guitar.mp3",
-     "rebuild": "media/discipline-30s/rebuild-guitar.mp3"
+     "rebuild": "media/discipline-30s/rebuild-guitar.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "bass",
      "label": "Bass",
      "original": "media/discipline-30s/original-bass.mp3",
-     "rebuild": "media/discipline-30s/rebuild-bass.mp3"
+     "rebuild": "media/discipline-30s/rebuild-bass.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "drums",
      "label": "Drums",
      "original": "media/discipline-30s/original-drums.mp3",
-     "rebuild": "media/discipline-30s/rebuild-drums.mp3"
+     "rebuild": "media/discipline-30s/rebuild-drums.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "other",
      "label": "Other / synths",
      "original": "media/discipline-30s/original-other.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "residual",
      "label": "Residual",
      "original": "media/discipline-30s/original-residual.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     }
    ]
   },
@@ -124,43 +140,57 @@
      "key": "lead_vocals",
      "label": "Vocals",
      "original": "media/lights_in_the_sky-30s/original-lead_vocals.mp3",
-     "rebuild": "media/lights_in_the_sky-30s/rebuild-lead_vocals.mp3"
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-lead_vocals.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "backing_vocals",
      "label": "Backing vocals",
      "original": "media/lights_in_the_sky-30s/original-backing_vocals.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "piano",
      "label": "Keys",
      "original": "media/lights_in_the_sky-30s/original-piano.mp3",
-     "rebuild": "media/lights_in_the_sky-30s/rebuild-piano.mp3"
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-piano.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "guitar",
      "label": "Guitar",
      "original": "media/lights_in_the_sky-30s/original-guitar.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "drums",
      "label": "Drums",
      "original": "media/lights_in_the_sky-30s/original-drums.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "other",
      "label": "Other / synths",
      "original": "media/lights_in_the_sky-30s/original-other.mp3",
-     "rebuild": "media/lights_in_the_sky-30s/rebuild-other.mp3"
+     "rebuild": "media/lights_in_the_sky-30s/rebuild-other.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "residual",
      "label": "Residual",
      "original": "media/lights_in_the_sky-30s/original-residual.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     }
    ]
   },
@@ -202,45 +232,59 @@
    "parts": [
     {
      "key": "lead_vocals",
-     "label": "Vocals",
+     "label": "Choir / pad (vocal stem)",
      "original": "media/999999-30s/original-lead_vocals.mp3",
-     "rebuild": "media/999999-30s/rebuild-lead_vocals.mp3"
+     "rebuild": "media/999999-30s/rebuild-lead_vocals.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "backing_vocals",
      "label": "Backing vocals",
      "original": "media/999999-30s/original-backing_vocals.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "piano",
      "label": "Keys",
      "original": "media/999999-30s/original-piano.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "bass",
      "label": "Bass",
      "original": "media/999999-30s/original-bass.mp3",
-     "rebuild": "media/999999-30s/rebuild-bass.mp3"
+     "rebuild": "media/999999-30s/rebuild-bass.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "drums",
      "label": "Drums",
      "original": "media/999999-30s/original-drums.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "other",
      "label": "Other / synths",
      "original": "media/999999-30s/original-other.mp3",
-     "rebuild": "media/999999-30s/rebuild-other.mp3"
+     "rebuild": "media/999999-30s/rebuild-other.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "residual",
      "label": "Residual",
      "original": "media/999999-30s/original-residual.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     }
    ]
   },
@@ -282,45 +326,59 @@
    "parts": [
     {
      "key": "lead_vocals",
-     "label": "Vocals",
+     "label": "Choir / pad (vocal stem)",
      "original": null,
-     "rebuild": "media/corona_radiata-30s/rebuild-lead_vocals.mp3"
+     "rebuild": "media/corona_radiata-30s/rebuild-lead_vocals.mp3",
+     "original_note": "silent in the original",
+     "rebuild_note": null
     },
     {
      "key": "backing_vocals",
      "label": "Backing vocals",
      "original": "media/corona_radiata-30s/original-backing_vocals.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     },
     {
      "key": "piano",
      "label": "Keys",
      "original": "media/corona_radiata-30s/original-piano.mp3",
-     "rebuild": "media/corona_radiata-30s/rebuild-piano.mp3"
+     "rebuild": "media/corona_radiata-30s/rebuild-piano.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "guitar",
      "label": "Guitar",
      "original": "media/corona_radiata-30s/original-guitar.mp3",
-     "rebuild": "media/corona_radiata-30s/rebuild-guitar.mp3"
+     "rebuild": "media/corona_radiata-30s/rebuild-guitar.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "bass",
      "label": "Bass",
      "original": "media/corona_radiata-30s/original-bass.mp3",
-     "rebuild": "media/corona_radiata-30s/rebuild-bass.mp3"
+     "rebuild": "media/corona_radiata-30s/rebuild-bass.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "other",
      "label": "Other / synths",
      "original": "media/corona_radiata-30s/original-other.mp3",
-     "rebuild": "media/corona_radiata-30s/rebuild-other.mp3"
+     "rebuild": "media/corona_radiata-30s/rebuild-other.mp3",
+     "original_note": null,
+     "rebuild_note": null
     },
     {
      "key": "residual",
      "label": "Residual",
      "original": "media/corona_radiata-30s/original-residual.mp3",
-     "rebuild": null
+     "rebuild": null,
+     "original_note": null,
+     "rebuild_note": "not in the rebuild"
     }
    ]
   }
