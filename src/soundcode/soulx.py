@@ -54,24 +54,10 @@ def _notes_with_words(doc) -> list[tuple[float, float, int, str, int]]:
     at the word boundaries (same pitch), a word covering several notes sings
     them as a melisma (type 3), and a word no note overlaps gets one at the
     nearest note's pitch. Notes outside every word are sung on 'ah'.
-    (Note-driven assignment silently dropped 11 of River's 61 words.)
-    A word's last note is held while `:contour.vox` says it is still voiced
-    (River sent 5.8 of its 23 voiced seconds as rest, cutting words short)."""
-    from .contour import STEP_S, read_contour
-
+    (Note-driven assignment silently dropped 11 of River's 61 words.)"""
     notes = ss.vocal_notes(doc, ss.vocal_stream(doc))
     ws = [w for w in ss.words(doc) if w[1] > w[0]]
     out: list[tuple[float, float, int, str, int]] = []
-    voiced: list[list[float]] = []                      # contour runs, touching lines merged
-    for start, vals in sorted(read_contour(doc), key=lambda x: x[0]):
-        end = start + len(vals) * STEP_S
-        if voiced and start - voiced[-1][1] < 0.03:
-            voiced[-1][1] = max(voiced[-1][1], end)
-        else:
-            voiced.append([start, end])
-
-    def voiced_until(t: float) -> float:
-        return next((b for a, b in voiced if a <= t < b), t)
 
     def nearest_pitch(t: float) -> int:
         if not notes:
@@ -87,8 +73,6 @@ def _notes_with_words(doc) -> list[tuple[float, float, int, str, int]]:
         if not pieces:
             pieces = [(w0, w1, nearest_pitch((w0 + w1) / 2))]
         pieces[0] = (w0 if pieces[0][0] - w0 < 0.15 else pieces[0][0], pieces[0][1], pieces[0][2])
-        a, b, p = pieces[-1]
-        pieces[-1] = (a, max(b, min(w1, voiced_until(b - 0.01))), p)
         for m, (a, b, p) in enumerate(pieces):
             out.append((a, b, p, word, 2 if m == 0 else 3))
     covered = [(a, b) for a, b, *_ in out]
@@ -197,7 +181,7 @@ def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:
 CONTROL = "melody"          # "melody" (f0 curve) or "score" (MIDI notes)
 PROMPT_S = 12.0
 SEED = 0                    # SoulX is a diffusion model: fixed so re-renders and A/B tests repeat
-ALIGN = 3                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
+ALIGN = 2                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
 
 
 def settings() -> dict:

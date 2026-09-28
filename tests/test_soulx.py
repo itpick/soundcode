@@ -164,15 +164,3 @@ def test_soulx_settings_are_part_of_the_vocal_cache_key(tmp_path, monkeypatch):
     monkeypatch.setattr(soulx, "PROMPT_S", soulx.PROMPT_S + 4)
     b, _ = sing.sing(doc, ref=ref, cache=tmp_path, singer="soulx")
     assert a != b and len(calls) == 2
-
-
-def test_a_word_still_voiced_after_its_note_is_held_not_rested():
-    # E4 ends at 1.2 s but the contour says "river" is sung to 1.9 s: the note is held
-    # through the voiced part (River: 5.8 of 23 voiced seconds were sent as rest).
-    doc = parse(SONG.replace("1:3.000  E4  2.000b 90", "1:3.000  E4  0.400b 90")
-                + ":contour.vox rate=50\nf0  @1.000  " + " ".join(["6400"] * 45) + "\n")
-    river = [(a, b) for a, b, _, w, _ in soulx._notes_with_words(doc) if w == "river"]
-    assert river[-1][1] == pytest.approx(1.9, abs=0.03)
-    no_contour = [(a, b) for a, b, _, w, _ in soulx._notes_with_words(parse(
-        SONG.replace("1:3.000  E4  2.000b 90", "1:3.000  E4  0.400b 90"))) if w == "river"]
-    assert no_contour[-1][1] == pytest.approx(1.2, abs=0.01)
