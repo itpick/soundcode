@@ -72,6 +72,12 @@ roughly doubled on three of five test songs:
 `docs/results/2026-09-26-compare-tsumugi.md`. Singing spike (DiffSinger → Seed-VC,
 voice similarity 0.90 to the original singer): `docs/research/2026-09-26-singing-spike.md`.
 
+**Singing.** `render --with-vocals` sings the lead vocal from the `.sc` (notes,
+lyrics and the `:contour.vox` pitch curve) with DiffSinger, then converts it to the
+original singer's voice with Seed-VC. Set `SOUNDCODE_SEEDVC_HOST=framepick` to run
+Seed-VC on a CUDA box (`scripts/install_seedvc_remote.sh`). River: 19 cents pitch
+error, 0.93 voice similarity (`docs/results/2026-09-27-singing-thin-slice.md`).
+
 Roadmap: `docs/superpowers/plans/2026-09-26-infinity-engine-roadmap.md`.
 
 Design and format spec: `docs/superpowers/specs/2026-07-31-soundcode-design.md`.
