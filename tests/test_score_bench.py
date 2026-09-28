@@ -633,6 +633,40 @@ def test_calibrate_degenerate_guard_is_relative_to_old_spread(tmp_path, monkeypa
     assert new["pitched"]["wide_range"]["ceiling"] == pytest.approx(0.75)
 
 
+def test_calibrate_never_writes_a_floor_looser_than_its_floor_cap(tmp_path, monkeypatch):
+    """`f0_cents`/`lag_ms_abs`/`word_mae_s` carry a `floor_cap` (design doc
+    amendment, 2026-09-28): a different-song floor for an error-size metric
+    can sit far past the point where the ear calls something wrong, so
+    calibration must never write a floor looser than the cap, even when
+    that's what it measured -- and must keep the `floor_cap` key itself."""
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
+    run, _ = _fake_run()
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        is_ceiling = "calib" in Path(est_path).parts
+        return {"f0_cents": 5.0 if is_ceiling else 500.0}   # measured floor 500 >> cap 100
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {"pitched": {
+        "f0_cents": {"floor": 300.0, "ceiling": 10.0, "weight": 3, "axis": "what", "floor_cap": 100}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    # reported raw (before the cap) for the caller to see what was measured
+    assert res["floors"]["pitched"]["f0_cents"] == pytest.approx(500.0)
+    new = json.loads(anchors_path.read_text())
+    assert new["pitched"]["f0_cents"]["floor"] == pytest.approx(100.0)      # capped, not 500
+    assert new["pitched"]["f0_cents"]["ceiling"] == pytest.approx(5.0)
+    assert new["pitched"]["f0_cents"]["weight"] == 3
+    assert new["pitched"]["f0_cents"]["floor_cap"] == 100                   # kept
+    assert any("looser than its perceptual cap" in w for w in res["warnings"])
+
+
 def test_calibrate_leaves_mix_and_sung_wer_manual_with_no_warning(tmp_path, monkeypatch):
     """`mix` (no `mix.wav` stem is ever separated) and the lyrics-aligned
     vocal metrics (calibration always calls `part_metrics` with `doc=None`)

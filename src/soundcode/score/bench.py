@@ -493,7 +493,13 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
     spread is too small relative to `old`'s to be useful, or the newly
     measured direction (better = higher vs. better = lower) flips against
     `old`'s. Each of those leaves `old` untouched and appends a warning;
-    weight and axis are always kept as they are."""
+    weight, axis and `floor_cap` (if present) are always kept as they are.
+
+    When `old` carries a `floor_cap` (a perceptual ceiling on how loose a
+    lower-is-better metric's floor may be -- design doc amendment,
+    2026-09-28), the floor actually written is never looser than that cap,
+    even though the spread/direction guards above are checked against the
+    floor as measured."""
     label = f"{part_type}.{metric}"
     if ceiling is None or floor is None:
         warnings.append(f"{label}: not enough data to measure (ceiling={ceiling}, floor={floor}) "
@@ -511,6 +517,12 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
         warnings.append(f"{label}: direction flipped (was {old['floor']:g} -> {old['ceiling']:g}, "
                         f"measured {floor:g} -> {ceiling:g}) -- keeping the existing anchor")
         return dict(old)
+    cap = old.get("floor_cap")
+    direction = old_dir or new_dir
+    if cap is not None and direction < 0 and floor > cap:
+        warnings.append(f"{label}: measured floor {floor:g} looser than its perceptual cap "
+                        f"{cap:g} -- capping")
+        floor = cap
     return {**old, "floor": floor, "ceiling": ceiling}
 
 
@@ -520,9 +532,10 @@ _ANCHOR_KEYS = ("floor", "ceiling", "weight", "axis")
 def _dump_anchors(data: dict) -> str:
     """`anchors.json`'s on-disk text: part types and metrics sorted (a
     stable diff run to run), one compact line per metric, keys in
-    `_ANCHOR_KEYS` order. `json.dumps` on an int leaves it an int and on a
-    float leaves it a float, so an untouched anchor's `floor`/`ceiling`
-    keep whatever type they were parsed as."""
+    `_ANCHOR_KEYS` order followed by any other keys the entry carries (e.g.
+    `floor_cap`), in the order they appear. `json.dumps` on an int leaves it
+    an int and on a float leaves it a float, so an untouched anchor's
+    `floor`/`ceiling` keep whatever type they were parsed as."""
     lines = ["{"]
     part_types = sorted(data)
     for pi, part_type in enumerate(part_types):
@@ -555,7 +568,10 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
 
     Both use `scorer.part_metrics` -- the same per-part metric derivation
     `score_song` itself uses -- so calibration measures exactly what
-    scoring measures. Weights and axes are untouched.
+    scoring measures. Weights and axes are untouched. A metric with a
+    `floor_cap` (a perceptual ceiling on how loose a lower-is-better
+    floor may be -- design doc amendment, 2026-09-28) never has a looser
+    floor written, even when the measured median is (`_update_anchor`).
 
     A ceiling sample is only taken when the reference stem is active over
     the whole clip (`scorer.is_active`, the same gate `score_song` uses); a

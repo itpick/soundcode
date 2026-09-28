@@ -9,6 +9,7 @@ per slice, e.g. `level_diff_db_abs = |level_diff_db|`, `lag_ms_abs =
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -42,10 +43,17 @@ def score_slice(metrics: dict, part_type: str) -> dict:
     Returns `{axes: {what, sound, dyn}, score, metrics: {name: {raw, score}}}`.
     A metric name with no anchor entry for `part_type` is ignored (not an
     error) — it is simply left out of `metrics` and never affects an axis.
-    An axis with no non-None metric score is `None` (excluded, not 0); the
-    overall score is the `AXIS_WEIGHTS`-weighted mean of the axes that
-    aren't None, renormalised over just those axes, or `None` if every axis
-    is None.
+    An axis with no non-None metric score is `None` (excluded, not 0); each
+    axis itself is still the `AXIS_WEIGHTS`-weighted **arithmetic** mean of
+    its metrics.
+
+    The part score combines the axes by a weighted **geometric** mean
+    (design doc amendment, 2026-09-28), renormalised over just the axes
+    that aren't None, or `None` if every axis is None. Each axis is floored
+    at 1 before the log, so a 0 doesn't collapse the whole slice to -inf --
+    the point is that one badly wrong axis (e.g. the right voice, wrong
+    notes) can no longer be averaged out by the other two, the way an
+    arithmetic mean would.
     """
     part_anchors = anchors.ANCHORS.get(part_type, {})
     out_metrics: dict[str, dict] = {}
@@ -66,13 +74,13 @@ def score_slice(metrics: dict, part_type: str) -> dict:
         total_w = sum(w for _, w in pairs)
         axes[axis] = (sum(s * w for s, w in pairs) / total_w) if total_w > 0 else None
 
-    num = 0.0
+    log_sum = 0.0
     den = 0.0
     for axis, w in AXIS_WEIGHTS.items():
         if axes[axis] is not None:
-            num += axes[axis] * w
+            log_sum += w * math.log(max(axes[axis], 1.0))
             den += w
-    score = (num / den) if den > 0 else None
+    score = math.exp(log_sum / den) if den > 0 else None
 
     return {"axes": axes, "score": score, "metrics": out_metrics}
 
