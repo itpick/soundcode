@@ -201,11 +201,44 @@ def _drums_from_kit(doc, s, stream_notes, target, sfpath, sr: int, n: int):
     return y
 
 
+PART_KEYS = ("lead_vocals", "backing_vocals", "piano", "guitar", "bass", "drums", "other", "residual")
+PART_LABELS = {"lead_vocals": "Vocals", "backing_vocals": "Backing vocals", "piano": "Keys",
+               "guitar": "Guitar", "bass": "Bass", "drums": "Drums", "other": "Other / synths",
+               "residual": "Residual"}
+_FAMILY_PART = {"voice": "lead_vocals", "drums": "drums", "bass": "bass", "keys": "piano", "gtr": "guitar"}
+
+
+def part_key(doc: Document, stream_name: str) -> str:
+    """The part (demo-page toggle) a stream belongs to: its `meta stem` when that
+    is a part, otherwise its General MIDI family."""
+    s = doc.stream(stream_name)
+    stem = s.meta.get("stem") if s is not None else None
+    if stem in PART_KEYS:
+        return stem
+    if stream_name.startswith("perc."):
+        return "drums"
+    target = gm.target_for(stream_name, s.fields.get("inst", "unknown") if s else "unknown")
+    return _FAMILY_PART.get(target.family, "other")
+
+
 def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
         with_vocals: bool = False) -> np.ndarray:
     """Mix rendered streams. Vocal streams are left out unless asked for: until
     Milestone 2 gives them a real singing voice, a "voice oohs" line is a
     distraction when judging the instruments."""
+    return _mix(doc, streams, sr, with_vocals, parts=None)[0]
+
+
+def mix_parts(doc: Document, streams: dict[str, np.ndarray], sr: int,
+              with_vocals: bool = False) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """The same mix as `mix()` (identical samples), plus each part's stereo
+    contribution after gain, pan, section gains and the same normalisation, so
+    the parts sum to the mix."""
+    return _mix(doc, streams, sr, with_vocals, parts={})
+
+
+def _mix(doc, streams, sr, with_vocals, parts):
+    from .fx import parse_fx
     from .render import _GAIN, _PAN, section_gains
 
     n = max((y.shape[0] for y in streams.values()), default=sr)
@@ -217,24 +250,31 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
             continue
         has_level = s is not None and "level" in s.meta
         gain = 1.0 if has_level else _GAIN.get(target.family, _GAIN["unknown"])
-        from .fx import parse_fx
         pan = 0.0 if parse_fx(s) is not None else _PAN.get(target.family, 0.0)
-        buf[:, 0] += y[:, 0] * gain * (1.0 - max(pan, 0.0))
-        buf[:, 1] += y[:, 1] * gain * (1.0 + min(pan, 0.0))
+        left = y[:, 0] * gain * (1.0 - max(pan, 0.0))
+        right = y[:, 1] * gain * (1.0 + min(pan, 0.0))
+        buf[:len(y), 0] += left
+        buf[:len(y), 1] += right
+        if parts is not None:
+            p = parts.setdefault(part_key(doc, name), np.zeros((n, 2), dtype=np.float32))
+            p[:len(y), 0] += left
+            p[:len(y), 1] += right
+    arrays = [buf, *(parts or {}).values()]
     for start_s, end_s, g in section_gains(doc):
         a, b = int(start_s * sr), min(int(end_s * sr), n)
         if b > a:
-            buf[a:b] *= g
+            for x in arrays:
+                x[a:b] *= g
     peak = float(np.abs(buf).max())
     if peak > 0:
-        buf *= 0.89 / peak
-    return buf
+        for x in arrays:
+            x *= 0.89 / peak
+    return buf, parts
 
 
-def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
-           with_vocals: bool = False, voice_ref: Path | None = None,
-           no_fx: bool = False, singer: str | None = None) -> np.ndarray:
-    sr = sr or doc.sample_rate
+def _streams(doc: Document, sr: int, sf2: Path | None, with_vocals: bool,
+             voice_ref: Path | None, no_fx: bool, singer: str | None) -> dict[str, np.ndarray]:
+    """Every stream rendered on its own, the sung vocal included when asked for."""
     streams = render_streams(doc, sr, sf2, no_fx=no_fx)
     if with_vocals:
         import sys
@@ -246,12 +286,28 @@ def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
             wav, warns = sing.sing(doc, voice_ref, singer=singer)
         except NoVocalError as exc:
             print(f"with-vocals: {exc}; rendering instruments only", file=sys.stderr)
-            return mix(doc, streams, sr, with_vocals)
+            return streams
         for w in warns:
             print(f"with-vocals: {w}", file=sys.stderr)
         streams[name] = _load_stream(wav, sr, max((y.shape[0] for y in streams.values()), default=0),
                                      doc.stream(name), no_fx=no_fx)
-    return mix(doc, streams, sr, with_vocals)
+    return streams
+
+
+def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
+           with_vocals: bool = False, voice_ref: Path | None = None,
+           no_fx: bool = False, singer: str | None = None) -> np.ndarray:
+    sr = sr or doc.sample_rate
+    return mix(doc, _streams(doc, sr, sf2, with_vocals, voice_ref, no_fx, singer), sr, with_vocals)
+
+
+def render_parts(doc: Document, sr: int | None = None, sf2: Path | None = None,
+                 with_vocals: bool = False, voice_ref: Path | None = None,
+                 no_fx: bool = False, singer: str | None = None
+                 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """`render()` plus each part's share of the mix (see `mix_parts`)."""
+    sr = sr or doc.sample_rate
+    return mix_parts(doc, _streams(doc, sr, sf2, with_vocals, voice_ref, no_fx, singer), sr, with_vocals)
 
 
 VOICE_RANGE_DB = 30.0

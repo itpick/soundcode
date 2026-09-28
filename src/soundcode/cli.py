@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
                           help="the original singer (wav); default out/stems/<source>/lead_vocals.wav")
     p_render.add_argument("--with-vocals", action="store_true",
                           help="include vocal streams (sf2 engine leaves them out by default)")
+    p_render.add_argument("--parts", metavar="DIR",
+                          help="also write each part (vocals, keys, bass, drums, …) as DIR/<part>.wav")
 
     p_sep = sub.add_parser("separate", help="split audio into vocal and instrument stems")
     p_sep.add_argument("file")
@@ -130,8 +132,31 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "render":
             doc = parse_file(args.file)
             if args.engine == "mock":
+                if args.parts:
+                    print("render: --parts needs the sf2 engine", file=sys.stderr)
+                    return 2
                 from .render import render_to_file
                 suffix = ".mock.wav"
+            elif args.parts:
+                from . import render_sf
+
+                def render_to_file(doc, out, sr):
+                    import numpy as np
+                    import soundfile as sf
+
+                    sr = sr or doc.sample_rate
+                    audio, parts = render_sf.render_parts(
+                        doc, sr, with_vocals=args.with_vocals,
+                        voice_ref=Path(args.voice_ref) if args.voice_ref else None,
+                        no_fx=args.no_fx, singer=args.singer)
+                    sf.write(out, audio, sr, subtype="PCM_16")
+                    parts_dir = Path(args.parts)
+                    parts_dir.mkdir(parents=True, exist_ok=True)
+                    for key, y in parts.items():
+                        if float(np.abs(y).max()) > 1e-4:
+                            sf.write(str(parts_dir / f"{key}.wav"), y, sr, subtype="PCM_16")
+                    return len(expand(doc)), audio.shape[0] / sr
+                suffix = ".render.wav"
             else:
                 from . import render_sf
 

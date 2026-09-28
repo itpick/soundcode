@@ -274,3 +274,54 @@ def test_drum_voices_round_trip_including_clap():
         assert gm.drum_note(gm.drum_voice(pitch)) == (36 if pitch == 35 else pitch)
     assert gm.drum_voice(39) == "clap"
     assert gm.drum_voice(81) == "gm81" and gm.drum_note("gm81") == 81
+
+
+# --- part toggles: per-part renders for the demo page ---------------------------------
+
+def test_parts_sum_to_the_mix_and_are_keyed_by_stem():
+    import numpy as np
+    from soundcode.parser import parse
+    doc = parse("""%sc 0.3
+@duration 2.0
+
+:notes.piano inst=keys.piano
+meta stem=piano
+@0.0 C4 1.0s 90
+
+:notes.bass inst=bass.electric
+@0.5 C2 1.0s 90
+""")
+    sr = 8000
+    streams = {"notes.piano": np.full((sr * 2, 2), 0.1, np.float32),
+               "notes.bass": np.full((sr * 2, 2), 0.2, np.float32)}
+    buf, parts = render_sf.mix_parts(doc, streams, sr)
+    assert set(parts) == {"piano", "bass"}                 # meta stem, else GM family
+    assert np.allclose(sum(parts.values()), buf, atol=1e-6)
+    assert np.array_equal(buf, render_sf.mix(doc, streams, sr))   # mix() is unchanged
+
+
+def test_part_key_falls_back_to_family():
+    from soundcode.parser import parse
+    doc = parse("%sc 0.3\n\n:notes.lead inst=voice.lead\n@0.0 C4 1.0s 90\n\n:perc.drums\n@0.0 kick 0.1s 100\n")
+    assert render_sf.part_key(doc, "notes.lead") == "lead_vocals"
+    assert render_sf.part_key(doc, "perc.drums") == "drums"
+
+
+@needs_sf2
+def test_cli_render_parts_writes_each_sounding_part(tmp_path):
+    import soundfile as sf
+    sc = tmp_path / "song.sc"
+    sc.write_text(SCALE_SC + "\n:notes.bass inst=bass.electric\n@0.0 C2 1.0s 100\n")
+    out, parts = tmp_path / "song.wav", tmp_path / "parts"
+    assert cli.main(["render", str(sc), "-o", str(out), "--parts", str(parts)]) == 0
+    assert out.exists()
+    assert sorted(p.name for p in parts.iterdir()) == ["bass.wav", "piano.wav"]
+    info = sf.info(str(parts / "piano.wav"))
+    assert info.subtype == "PCM_16" and info.frames == sf.info(str(out)).frames
+
+
+def test_cli_render_parts_needs_the_sf2_engine(tmp_path, capsys):
+    sc = tmp_path / "song.sc"
+    sc.write_text(SCALE_SC)
+    assert cli.main(["render", str(sc), "--engine", "mock", "--parts", str(tmp_path / "p")]) == 2
+    assert "--parts" in capsys.readouterr().err
