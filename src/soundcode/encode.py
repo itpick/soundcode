@@ -182,6 +182,7 @@ class Stage:
     stem: str = ""                # source stem, for the renderer and compare
     gated: bool = False           # silent under the loudness gate: no fallback
     header_fields: dict[str, str] = field(default_factory=dict)   # e.g. inst=
+    offset: float | None = None                                   # where the clip sits in the song
     extra_meta: dict[str, str] = field(default_factory=dict)     # extra `meta k=v` lines
     kit_src: Path | None = None                                   # drum one-shots to ship
     level_db: float | None = None  # source stem RMS over its active blocks
@@ -837,7 +838,8 @@ def lyric_cells(words: list[tuple], grid: dict) -> list[str]:
 
 
 def stage_lyrics(stem: Path | None, sr: int, grid: dict,
-                 reference: list | None = None) -> Stage:
+                 lines: list | None = None, duration: float = 0.0,
+                 offset: float | None = None) -> Stage:
     """Word-level lyrics from the vocal stem, if a Whisper backend is present."""
     st = Stage("text.vox", src="whisper")
     if stem is None or not grid:
@@ -866,8 +868,11 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
         st.warns.append(f"transcription failed: {exc}")
         return st
 
-    if reference:
+    reference = None
+    if lines:
         from . import lyrics as ly
+        reference, st.offset = ly.reference_for(words, lines, duration, offset)
+    if reference:
         reconciled, ratio = ly.reconcile(words, reference)
         if ratio >= 0.5:
             words = reconciled
@@ -888,7 +893,7 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
 
 def encode(path: str, out_path: str | None = None,
            workdir: str | None = None, title: str | None = None,
-           artist: str | None = None) -> str:
+           artist: str | None = None, offset: float | None = None) -> str:
     """Analyse `path` and write a .sc file. Returns the .sc text."""
     src = Path(path)
     wd = Path(workdir or tempfile.mkdtemp(prefix="sc-")) / (src.stem + ".scw")
@@ -945,10 +950,11 @@ def encode(path: str, out_path: str | None = None,
     song_title, song_artist = ly.guess_title_artist(src, title, artist)
     _log(f"published lyrics: {song_title!r} / {song_artist!r}")
     ref_lines = ly.lookup(song_title, song_artist, None)
-    reference = ly.ref_words(ref_lines, 0.0, duration) if ref_lines else None
     if ref_lines is None:
         STEM_NOTES.append(f"no published lyrics found for {song_title!r} / {song_artist!r}; ASR only")
-    _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid, reference)
+    _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid, ref_lines, duration,
+                                              offset)
+    song_offset = offset if offset is not None else (text_st.offset or 0.0)
     _log("mix");       mix_st = stage_mix(y, sr)
 
     bpm = grid.get("tempo", 0.0)
@@ -975,8 +981,8 @@ def encode(path: str, out_path: str | None = None,
         "",
         f'@title     "{song_title}"',
         f'@source    {src.name}',
-        *([f'@artist    "{song_artist}"'] if song_artist else []),
-        "@offset    0.000",
+        *([f'@artist    "{artist}"'] if artist else []),      # only when stated, never guessed
+        f"@offset    {song_offset:.3f}",
         f"@duration  {duration:.3f}",
         f"@sr        {sr}",
         "",

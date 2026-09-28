@@ -122,3 +122,54 @@ def test_reference_words_after_the_last_heard_word_are_dropped():
     ref = [(1.0, w) for w in "walk me oh oh oh".split()]
     words, _ = ly.reconcile(asr, ref)
     assert [w[2] for w in words] == ["walk", "me"]
+
+
+# --- final-review fixes ------------------------------------------------------------------------
+
+def test_a_confident_asr_word_beats_the_reference():
+    heard = [("walk", 0.9), ("me", 0.9), ("down", 0.9), ("meeting", 0.97), ("to", 0.9),
+             ("the", 0.9), ("harder", 0.5)]
+    asr = [(1.0 + 0.3 * i, 1.3 + 0.3 * i, w, p) for i, (w, p) in enumerate(heard)]
+    ref = [(1.0, w) for w in "walk me down eating to the harbor".split()]
+    words, _ = ly.reconcile(asr, ref)
+    got = {w[2]: w[4] for w in words}
+    assert got["meeting"] == "eating" and got["harbor"] == "harder" and "eating" not in got
+
+
+def test_runs_of_missed_words_share_their_gap_and_never_overlap():
+    asr = [(1.0, 1.3, "walk", 0.9), (1.3, 1.5, "me", 0.9), (4.0, 4.3, "down", 0.9), (4.3, 4.6, "now", 0.9)]
+    ref = [(1.0, w) for w in "walk me oh oh oh down now".split()]
+    words, _ = ly.reconcile(asr, ref)
+    starts = [w[0] for w in words]
+    assert starts == sorted(starts)
+    ohs = [w for w in words if w[2] == "oh"]
+    assert all(1.5 <= w[0] < w[1] <= 4.0 for w in ohs)
+
+
+def test_a_leading_run_is_anchored_before_the_first_heard_word():
+    asr = [(5.0, 5.3, "down", 0.9)]
+    ref = [(None, w) for w in "walk me down".split()]
+    words, _ = ly.reconcile(asr, ref)
+    assert words[0][2] == "walk" and words[0][0] >= 3.5 and words[1][1] <= 5.0
+
+
+def test_file_names_only_give_an_artist_with_a_spaced_dash():
+    assert ly.guess_title_artist(Path("river-30s.wav")) == ("river-30s", None)
+    assert ly.guess_title_artist(Path("The River - Jordan Feliz.mp3"))[1] in ("The River", "Jordan Feliz")
+
+
+def test_best_window_finds_a_mid_song_clip():
+    lines = [ly.Line(0.0, "intro words here"), ly.Line(30.0, "walk me down to the harbor"),
+             ly.Line(34.0, "lights are low tonight")]
+    asr = [(0.5 + i * 0.4, 0.8 + i * 0.4, w, 0.9) for i, w in enumerate("walk me down to the harbor lights are low".split())]
+    off = ly.best_offset(asr, lines, duration=10.0)
+    assert 29.0 <= off <= 30.5
+
+
+def test_reference_for_uses_a_given_offset_or_finds_one():
+    lines = [ly.Line(0.0, "intro words here"), ly.Line(30.0, "walk me down to the harbor")]
+    asr = [(0.5 + i * 0.4, 0.8 + i * 0.4, w, 0.9) for i, w in enumerate("walk me down to the harbor".split())]
+    ref, off = ly.reference_for(asr, lines, duration=10.0, offset=None)
+    assert off == 30.0 and [w for _, w in ref][:2] == ["walk", "me"]
+    ref2, off2 = ly.reference_for(asr, lines, duration=10.0, offset=0.0)
+    assert off2 == 0.0 and [w for _, w in ref2][0] == "intro"

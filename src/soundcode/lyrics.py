@@ -45,14 +45,16 @@ def guess_title_artist(path: Path, title: str | None = None,
     return (title or t), (artist or (a if not title or t.lower() == title.lower() else None))
 
 
+CONFIDENT = 0.9      # an ASR word this sure beats the published text (LRCLIB has typos too)
+
+
 def _from_name(stem: str) -> tuple[str, str | None]:
     if " - " in stem:
         a, t = stem.split(" - ", 1)
         return t.strip(), a.strip()
-    if "-" in stem:
-        t, a = stem.rsplit("-", 1)
-        a = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", a).strip()          # JordanFelix -> Jordan Felix
-        return t.strip(), a or None
+    m = re.fullmatch(r"(.+)-([A-Z][a-z]+(?:[A-Z][a-z]+)+)", stem)   # Title-JordanFelix
+    if m:
+        return m.group(1).strip(), re.sub(r"(?<=[a-z])(?=[A-Z])", " ", m.group(2))
     return stem, None
 
 
@@ -103,6 +105,21 @@ def lookup(title: str, artist: str | None, duration: float | None,
     return _lines(rec) if rec else None
 
 
+def best_offset(asr: list[tuple], lines: list[Line], duration: float) -> float:
+    """Where in the song a clip sits: the synced-line start whose window best
+    matches what was heard (0.0 when nothing matches)."""
+    starts = sorted({0.0, *(ln.t for ln in lines if ln.t is not None)})
+    best, best_ratio = 0.0, 0.0
+    for off in starts:
+        ref = ref_words(lines, off, off + duration)
+        if not ref:
+            continue
+        _, ratio = reconcile(asr, ref)
+        if ratio > best_ratio + 1e-9:
+            best, best_ratio = off, ratio
+    return best if best_ratio >= 0.5 else 0.0
+
+
 def ref_words(lines: list[Line], start: float, end: float) -> list[tuple[float | None, str]]:
     timed = any(ln.t is not None for ln in lines)
     out = []
@@ -133,7 +150,10 @@ def reconcile(asr: list[tuple[float, float, str, float]],
             for k in range(n):
                 if k < i2 - i1 and k < j2 - j1:
                     s, e, heard, p = asr[i1 + k]
-                    out.append((s, e, b[j1 + k], 0.7, normalise(heard) or None))
+                    if p >= CONFIDENT:                    # sure of what was sung: keep it
+                        out.append((s, e, normalise(heard), p, b[j1 + k]))
+                    else:
+                        out.append((s, e, b[j1 + k], 0.7, normalise(heard) or None))
                 elif k < j2 - j1:                                      # extra reference word
                     out.append((None, None, b[j1 + k], 0.5, None))
                 else:                                                  # extra ASR word
@@ -147,11 +167,33 @@ def reconcile(asr: list[tuple[float, float, str, float]],
     # lie past the clip): drop them rather than invent a performance
     while out and out[-1][0] is None:
         out.pop()
-    # time the reference-only words between their neighbours
-    for k, w in enumerate(out):
-        if w[0] is None:
-            prev = next((x[1] for x in reversed(out[:k]) if x[1] is not None), 0.0)
-            nxt = next((x[0] for x in out[k + 1:] if x[0] is not None), prev + 0.4)
-            span = max(nxt - prev, 0.1)
-            out[k] = (prev, prev + span, w[2], 0.5, None)
+    # time each run of reference-only words inside the gap around it (never overlapping)
+    k = 0
+    while k < len(out):
+        if out[k][0] is not None:
+            k += 1
+            continue
+        j = k
+        while j < len(out) and out[j][0] is None:
+            j += 1
+        nxt = out[j][0] if j < len(out) else None
+        prev = out[k - 1][1] if k > 0 else None
+        n = j - k
+        if prev is None:                                   # leading run: just before the first heard word
+            end = nxt if nxt is not None else 0.4 * n
+            prev = max(0.0, end - 0.4 * n)
+        end = nxt if nxt is not None else prev + 0.4 * n
+        step = max((end - prev) / n, 0.01)
+        for m in range(n):
+            a0 = prev + m * step
+            out[k + m] = (a0, a0 + min(step, 0.6), out[k + m][2], 0.5, None)
+        k = j
     return out, ratio
+
+
+def reference_for(asr: list[tuple], lines: list[Line], duration: float,
+                  offset: float | None) -> tuple[list[tuple[float | None, str]], float]:
+    """Reference words for this clip: at `offset` when given, else wherever in
+    the song the clip best matches (a clip cut from the middle of a song)."""
+    off = offset if offset is not None else best_offset(asr, lines, duration)
+    return ref_words(lines, off, off + duration), off

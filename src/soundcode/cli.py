@@ -114,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     p_encode.add_argument("--workdir", default=None)
     p_encode.add_argument("--title", default=None)
     p_encode.add_argument("--artist", default=None, help="for the published-lyrics lookup")
+    p_encode.add_argument("--offset", type=float, default=None,
+                          help="where this clip starts in the full song, seconds (default: found from the lyrics)")
 
     p_serve = sub.add_parser("serve", help="local A/B listening server")
     p_serve.add_argument("--host", default="127.0.0.1")
@@ -210,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
             from .encode import encode
 
             out = args.out or str(Path(args.file).with_suffix(".sc"))
-            encode(args.file, out, args.workdir, args.title, args.artist)
+            encode(args.file, out, args.workdir, args.title, args.artist, args.offset)
             return 0
 
         if args.cmd == "serve":

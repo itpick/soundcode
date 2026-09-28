@@ -96,6 +96,13 @@ def _segment(doc, t0: float, t1: float, notes, index: str) -> dict:
         cur = b
     if t1 - cur > 1e-6:
         items.append(("<SP>", t1 - cur, 0, 1))
+    merged: list[tuple[str, float, int, int]] = []       # no zero-length tokens after rounding
+    for it in items:
+        if merged and it[1] < 0.01:
+            merged[-1] = (merged[-1][0], merged[-1][1] + it[1], merged[-1][2], merged[-1][3])
+        else:
+            merged.append(it)
+    items = merged
     durs = [round(d, 2) for _, d, _, _ in items]
     durs[-1] = round(durs[-1] + (t1 - t0) - sum(durs), 2)
     return {"index": index, "language": "English", "time": [int(round(t0 * 1000)), int(round(t1 * 1000))],
@@ -108,24 +115,30 @@ def _segment(doc, t0: float, t1: float, notes, index: str) -> dict:
 
 
 def metadata(doc, t0: float, t1: float) -> list[dict]:
-    """SoulX segments covering [t0, t1], split at rests into pieces <= 15 s."""
+    """SoulX segments covering [t0, t1], <= 15 s each, cut between notes: at a
+    rest (>= 0.3 s) once a segment is half full, else at the widest gap before
+    it would overflow. A note is never split."""
     notes = [n for n in _notes_with_words(doc) if n[1] > t0 and n[0] < t1]
-    cuts, start = [], t0
-    for (a0, b0, *_), (a1, *_) in zip(notes, notes[1:]):
-        if a1 - b0 >= 0.3 and a1 - start > 1.0 and (a1 - start) >= MAX_SEG_S * 0.5:
-            cuts.append((start, (b0 + a1) / 2))
-            start = (b0 + a1) / 2
+    cuts, start, best = [], t0, None                    # best = (gap, mid) in the current segment
+    for (a0, b0, *_), (a1, b1, *_) in zip(notes, notes[1:]):
+        mid, gap = (b0 + a1) / 2, a1 - b0
+        if gap >= 0.3 and mid - start >= MAX_SEG_S * 0.5:
+            cuts.append((start, mid)); start, best = mid, None
+            continue
+        if mid - start > 1.0 and (best is None or gap >= best[0]):
+            best = (gap, mid)
+        if b1 - start > MAX_SEG_S:
+            cut = best[1] if best else start + MAX_SEG_S
+            cuts.append((start, cut)); start, best = cut, None
     cuts.append((start, t1))
-    segs, fixed = [], []
-    for a, b in cuts:                                         # hard cap: split anything still too long
+    fixed = []
+    for a, b in cuts:                                   # a tail longer than 15 s with no notes
         while b - a > MAX_SEG_S:
             fixed.append((a, a + MAX_SEG_S))
             a += MAX_SEG_S
         fixed.append((a, b))
-    for k, (a, b) in enumerate(fixed):
-        inside = [n for n in notes if n[1] > a and n[0] < b]
-        segs.append(_segment(doc, a, b, inside, f"vocal_{int(a * 1000)}_{int(b * 1000)}"))
-    return segs
+    return [_segment(doc, a, b, [n for n in notes if n[1] > a and n[0] < b],
+                     f"vocal_{int(a * 1000)}_{int(b * 1000)}") for a, b in fixed]
 
 
 def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:

@@ -64,7 +64,8 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
     settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations,
                 "singer": singer}
     out = Path(cache) / f"{cache_key(doc, ref, settings)}.wav"
-    score = ss.build(doc, durations=durations)
+    # SoulX only needs the score's warnings; the bank's duration model is DiffSinger's
+    score = ss.build(doc, durations="heuristic" if singer == "soulx" else durations)
     if out.exists():
         try:
             import soundfile as _sf

@@ -64,3 +64,25 @@ def test_soulx_failure_falls_back_to_diffsinger(tmp_path, monkeypatch):
     monkeypatch.setattr(sing.seedvc, "convert", fake_convert)
     p, warns = sing.sing(parse(SONG), ref, cache=tmp_path / "c", singer="soulx")
     assert p.exists() and any("soulx" in w.lower() and "CUDA OOM" in w for w in warns)
+
+
+def test_soulx_does_not_need_the_diffsinger_bank(tmp_path, monkeypatch):
+    import soundfile as sf
+    ref = tmp_path / "ref.wav"
+    sf.write(str(ref), np.zeros(44100, np.float32), 44100)
+    monkeypatch.setenv("SOUNDCODE_DIFFSINGER", str(tmp_path / "nope"))
+    monkeypatch.setattr(soulx, "render", lambda *a, **k: np.zeros(44100, np.float32))
+    p, _ = sing.sing(parse(SONG), ref, cache=tmp_path / "c", singer="soulx")
+    assert p.exists()
+
+
+def test_long_unbroken_singing_is_cut_at_a_rest_not_mid_note():
+    notes = "\n".join(f"@{t:.2f} C4 0.45s 90" for t in np.arange(0.0, 20.0, 0.5))    # 50 ms gaps only
+    words = " | ".join(f'@{t:.2f} "la" 0.45s' for t in np.arange(0.0, 20.0, 0.5))
+    doc = parse(f"%sc 0.3\n@duration 20.0\n\n:notes.lead inst=voice.lead\n{notes}\n\n:text.vox\n{words}\n")
+    segs = soulx.metadata(doc, 0.0, 20.0)
+    assert all(s["time"][1] - s["time"][0] <= 15000 for s in segs)
+    for s in segs:
+        assert all(float(d) >= 0.01 for d in s["duration"].split())
+    total_notes = sum(1 for s in segs for t in s["note_type"].split() if t != "1")
+    assert total_notes == 40                                                      # no note split in two

@@ -207,7 +207,9 @@ def sung_wer(doc, wav) -> float | None:
     ref = _sc_words(doc)
     if not ref:
         return None
-    segs, _ = WhisperModel("small", device="cpu", compute_type="int8").transcribe(
+    from .lyrics import asr_download_root
+    segs, _ = WhisperModel("small", device="cpu", compute_type="int8",
+                           download_root=asr_download_root()).transcribe(
         str(wav), language="en")
     heard = [w for s in segs for w in (normalise(x) for x in s.text.replace("-", " ").split()) if w]
     return wer(ref, heard)
@@ -322,7 +324,8 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             wav, _ = sing.sing(doc, voice_ref, singer=singer)
             sung_wav = wav
             rend["lead_vocals"] = sung_stream(doc, wav, n)
-            notes_side["sung"] = "lead_vocals row compares the sung vocal (DiffSinger -> Seed-VC)"
+            from .sing import DEFAULT_SINGER
+            notes_side["sung"] = f"lead_vocals row compares the sung vocal ({singer or DEFAULT_SINGER})"
     else:
         rs = default_out_dir(sc_or_wav)
         separate(sc_or_wav, rs)
