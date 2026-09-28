@@ -400,6 +400,7 @@
       side: "original", on: {}, buffers: null, loading: null, gains: {}, sources: [],
       playing: false, offset: 0, startedAt: 0, duration: (song.summary && song.summary.duration) || 30, raf: 0
     };
+    var dragging = false;               // the user holds the seek thumb: playback must not move it
     parts.forEach(function (p) { state.on[p.key] = true; });
 
     // row 1: play, seek, time
@@ -407,7 +408,7 @@
     var playBtn = el("button", { cls: "play", text: "Play", attrs: { type: "button", "aria-label": "Play — " + song.title } });
     var seek = el("input", {
       cls: "seek",
-      attrs: { type: "range", min: "0", max: String(state.duration), step: "0.01", value: "0", "aria-label": "Position — " + song.title }
+      attrs: { type: "range", min: "0", max: String(state.duration), step: "any", value: "0", "aria-label": "Position — " + song.title }
     });
     var time = el("span", { cls: "time", text: "0:00 / " + fmtTime(state.duration), attrs: { "aria-live": "off" } });
     row1.appendChild(playBtn);
@@ -475,8 +476,9 @@
     }
 
     function showTime(t) {
+      if (dragging) return;             // the readout previews the dragged position instead
       time.textContent = fmtTime(t) + " / " + fmtTime(state.duration);
-      if (document.activeElement !== seek || !state.playing) seek.value = String(t);
+      seek.value = String(t);
     }
 
     function gainFor(p, side) {
@@ -627,8 +629,23 @@
       if (state.playing) pause(); else play();
     });
 
+    function seekValue() {
+      return Math.min(parseFloat(seek.value) || 0, state.duration);
+    }
+    // while dragging, `input` only previews the time; `change` (release, or a key step) seeks
+    // (release is deferred a tick so `change` still reads the user's value, not playback's)
+    function release() { setTimeout(function () { dragging = false; }, 0); }
+    seek.addEventListener("pointerdown", function () { dragging = true; });
+    seek.addEventListener("pointerup", release);
+    seek.addEventListener("pointercancel", release);
+    seek.addEventListener("keydown", function () { dragging = true; });
+    seek.addEventListener("keyup", release);
     seek.addEventListener("input", function () {
-      var t = Math.min(parseFloat(seek.value) || 0, state.duration);
+      time.textContent = fmtTime(seekValue()) + " / " + fmtTime(state.duration);
+    });
+    seek.addEventListener("change", function () {
+      var t = seekValue();
+      dragging = false;
       if (state.playing) startAt(t);
       else { state.offset = t; showTime(t); }
     });

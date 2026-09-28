@@ -244,6 +244,9 @@ def test_page_reads_data_json_safely():
     for needle in ("decodeAudioData", "createGain", "Original", "Rebuild", "aria-pressed",
                    "not in the rebuild", "not separated", "Loading parts"):
         assert needle in html
+    # the seek thumb follows playback unless the user is dragging it (focus is not dragging)
+    assert "pointerdown" in html and 'seek.addEventListener("change"' in html
+    assert "activeElement" not in html
 
 
 def test_build_lists_parts_from_both_sides(tmp_path, monkeypatch):
@@ -285,3 +288,22 @@ def test_build_lists_parts_from_both_sides(tmp_path, monkeypatch):
     shutil.rmtree(root / "work" / "discipline-30s.parts")      # parts missing: the render is stale
     site.build(root, root / "site", root / "work", run=run, songs=[song])
     assert any("render" in c for c in calls[n:])
+
+
+def test_an_unreadable_stem_names_its_song(tmp_path, monkeypatch):
+    import json
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    (root / song["clip"]).write_bytes(b"x" * 480_000)
+    stems = root / "out" / "stems" / "discipline-30s"
+    stems.mkdir(parents=True)
+    (stems / "piano.wav").write_bytes(b"not a wav")
+    (root / "site").mkdir()
+    (root / "site" / "data.json").write_text('{"old": true}')
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+    run, calls = _fake_run(root)
+    with pytest.raises(RuntimeError, match=r"^discipline-30s: .*piano"):
+        site.build(root, root / "site", root / "work", run=run, songs=[song])
+    assert json.loads((root / "site" / "data.json").read_text()) == {"old": True}
+    assert not (root / "site" / ".media.part").exists()

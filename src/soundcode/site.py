@@ -134,7 +134,11 @@ def export_parts(run, slug: str, stems_dir: Path, parts_dir: Path, staging: Path
     for key in PART_KEYS:
         entry = {"key": key, "label": PART_LABELS[key], "original": None, "rebuild": None}
         stem = stems_dir / f"{key}.wav"
-        if stem.is_file() and _peak(stem) >= PART_GATE:
+        try:
+            loud = stem.is_file() and _peak(stem) >= PART_GATE
+        except Exception as exc:                        # noqa: BLE001 — unreadable stem: name the song
+            raise RuntimeError(f"{slug}: could not read the {key} stem {stem} ({exc})") from exc
+        if loud:
             _mp3(run, stem, out / f"original-{key}.mp3", slug, gain=ORIGINAL_PART_GAIN)
             entry["original"] = f"media/{slug}/original-{key}.mp3"
         part = parts_dir / f"{key}.wav"
