@@ -839,10 +839,15 @@ def lyric_cells(words: list[tuple], grid: dict) -> list[str]:
 
 
 # Whisper hallucinates these on silence/instrumental audio; a lone one, heard
-# with low confidence, is not a lyric.
+# with low confidence on any of its words, is not a lyric. A truly sung
+# "thank you" is confident on every word, so the guard checks the MINIMUM word
+# probability, not the mean -- a mean can clear the threshold when only one
+# word (e.g. "Thank" ?0.19) is actually a guess and the other is a confident
+# but unrelated coincidence (e.g. "you." ?0.95).
 HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "you", "bye",
                   "subtitles by the amaraorg community"}
 NO_SPEECH_MAX = 0.6
+HALLUCINATION_MIN_PROB = 0.5
 
 
 def stage_lyrics(stem: Path | None, sr: int, grid: dict,
@@ -881,8 +886,8 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
     if words:
         transcript = " ".join(w[2] for w in words)
         norm = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", transcript.lower())).strip()
-        mean_prob = float(np.mean([w[3] for w in words]))
-        if norm in HALLUCINATIONS and mean_prob < 0.5:
+        min_prob = float(min(w[3] for w in words))
+        if norm in HALLUCINATIONS and min_prob < HALLUCINATION_MIN_PROB:
             st.warns.append(f'ASR heard only "{transcript}" (a common hallucination on '
                             "non-speech); no lyrics")
             words = []

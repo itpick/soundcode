@@ -66,6 +66,29 @@ def test_low_confidence_thank_you_is_a_hallucination(monkeypatch):
     assert any('ASR heard only "Thank you."' in w and "hallucination" in w for w in st.warns)
 
 
+def test_one_low_confidence_word_is_a_hallucination_even_if_the_other_is_confident(monkeypatch):
+    """Real regression (fix round 2): 999999-30s heard "Thank" ?0.19 / "you."
+    ?0.9-ish -- the MEAN cleared 0.5 so the old guard kept it. A truly sung
+    "thank you" is confident on every word, so the guard must use the
+    MINIMUM word probability, not the mean."""
+    segs = [FakeSegment(0.1, [FakeWord(4.288, 4.5, " Thank", 0.19),
+                              FakeWord(4.5, 4.7, " you.", 0.95)])]
+    st = _run(monkeypatch, segs)
+    assert st.ok is False
+    assert st.lines == []
+    assert any('ASR heard only "Thank you."' in w and "hallucination" in w for w in st.warns)
+
+
+def test_corona_radiata_thank_regression_is_a_hallucination(monkeypatch):
+    """Real regression (fix round 2): corona_radiata-30s heard "Thank" ?0.02."""
+    segs = [FakeSegment(0.1, [FakeWord(4.288, 4.5, " Thank", 0.02),
+                              FakeWord(4.5, 4.7, " you.", 0.97)])]
+    st = _run(monkeypatch, segs)
+    assert st.ok is False
+    assert st.lines == []
+    assert any('ASR heard only "Thank you."' in w and "hallucination" in w for w in st.warns)
+
+
 def test_high_confidence_thank_you_is_kept_a_singer_can_sing_it(monkeypatch):
     segs = [FakeSegment(0.1, [FakeWord(4.288, 4.5, " Thank", 0.95),
                               FakeWord(4.5, 4.7, " you.", 0.95)])]
