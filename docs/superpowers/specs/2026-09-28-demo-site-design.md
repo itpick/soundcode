@@ -38,6 +38,19 @@ The page uses only the four Nine Inch Nails clips from *The Slip* (2008): Discip
 
 **Look:** plain HTML/CSS/JS, one file plus `data.json` and `media/`. Light and dark themes via color tokens. No external scripts; a Google Font at most.
 
+## Part toggles (added 2026-09-28 at the user's request)
+
+"In the pages view we should show removing diff parts of the song with toggles."
+
+Each card plays through a transport instead of two plain players:
+- **Parts:** one toggle per part (Vocals, Backing vocals, Keys, Guitar, Bass, Drums, Other / synths, Residual), listing only the parts the song has.
+- **Original ⇄ Rebuild switch:** it keeps the playback position, so the same moment can be compared part by part.
+- **Where the parts come from:**
+  - Original: the separated stems, scaled back by 1/HEADROOM, with silent stems left out.
+  - Rebuild: each part rendered on its own through the same mix, so the parts sum to the full rebuild.
+- **Missing parts:** a part missing on one side shows disabled ("not in the rebuild"). That's honest about what the code doesn't carry yet, e.g. backing vocals or the residual.
+- **How it plays:** Web Audio, with every part started together and a gain per part; nothing else is added. The site grows to about 25–30 MB.
+
 ## Build (`scripts/build_site.py`)
 
 Songs are a constant list: slug, title and source clip under `audio/test/`. Every song renders `--with-vocals`; a clip with no vocal (999999 is instrumental) renders instruments-only through the existing NoVocalError path, and then gets `voice_bytes = 0`.

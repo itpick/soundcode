@@ -105,6 +105,16 @@ Known pins: librosa `<1.0` while on Python 3.11. torchaudio forced alignment was
 
 **Phase 7: Scale.** Full-length songs and batch corpus runs.
 
+## Future features (requested)
+
+**Different mixes of any song (requested 2026-09-28).** The `.sc` is editable code, so one encoded song can be rendered many ways:
+- *mix variants*: instrumental, a cappella, karaoke, vocals up, drums up, a different stereo image or room;
+- *arrangements and remixes*: swap instruments (piano → strings, a GM kit → another kit), change the tempo or key, restyle it into a genre (acoustic, lo-fi, EDM), possibly with a generative polish pass conditioned on the `.sc`.
+
+Depends on:
+- the per-stream renders already used by the renderer and the demo page's part toggles;
+- the benchmark scorer, to keep "faithful" renders from regressing.
+
 ## Known bugs (from review)
 
 - Every encoded note is +33 c sharp (`encode.py:439-441`).
