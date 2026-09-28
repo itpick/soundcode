@@ -433,3 +433,10 @@ def test_model_durations_keep_word_boundaries_and_total_length():
     b_m = np.cumsum([0] + mod.frames)
     for i0, i1 in mod.spans:
         assert b_h[i0] == b_m[i0] and b_h[i1] == b_m[i1]
+
+
+def test_words_past_the_end_are_dropped_not_overflowing():
+    doc = parse(SONG.replace('| 1:3.000 "river" 2.000b', '| 1:3.000 "river" 2.000b | @3.95 "oh" 0.5s | @4.2 "oh" 0.4s'))
+    sc = ss.build(doc)
+    assert sum(sc.frames) == sc.n_frames
+    assert any("past the end" in w for w in sc.warnings)

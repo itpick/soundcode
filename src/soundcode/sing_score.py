@@ -188,6 +188,10 @@ def build(doc, duration: float | None = None, durations: str = "heuristic") -> S
         else:
             seq.append(("SP", a, b, next_id()))
 
+    late = [w for t, _, w in ws if t >= dur - 0.05]
+    if late:
+        warn.append(f"dropped {len(late)} word(s) past the end of the song: {' '.join(late)}")
+        ws = [x for x in ws if x[0] < dur - 0.05]
     for i, (t, end, w) in enumerate(ws):
         nxt = ws[i + 1][0] if i + 1 < len(ws) else dur
         end = min(max(end, t + 0.12), nxt)

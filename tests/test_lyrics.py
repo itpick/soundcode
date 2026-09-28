@@ -115,3 +115,10 @@ def test_hyphenated_vocables_split_and_alts_are_clean():
     assert words == ["deep", "water", "oh", "oh", "oh", "oh"]
     out, _ = ly.reconcile([(1.0, 1.4, "delight.", 0.6)], [(1.0, "life")])
     assert out[0][4] in (None, "delight")
+
+
+def test_reference_words_after_the_last_heard_word_are_dropped():
+    asr = [(1.0, 1.3, "walk", 0.9), (1.3, 1.5, "me", 0.9)]
+    ref = [(1.0, w) for w in "walk me oh oh oh".split()]
+    words, _ = ly.reconcile(asr, ref)
+    assert [w[2] for w in words] == ["walk", "me"]

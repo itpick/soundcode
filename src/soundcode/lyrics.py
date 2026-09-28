@@ -143,6 +143,10 @@ def reconcile(asr: list[tuple[float, float, str, float]],
             out += [(asr[i][0], asr[i][1], asr[i][2], asr[i][3], None) for i in range(i1, i2)]
         else:                                                          # insert: reference only
             out += [(None, None, b[j], 0.5, None) for j in range(j1, j2)]
+    # reference words after the last word actually heard cannot be timed (and may
+    # lie past the clip): drop them rather than invent a performance
+    while out and out[-1][0] is None:
+        out.pop()
     # time the reference-only words between their neighbours
     for k, w in enumerate(out):
         if w[0] is None:
