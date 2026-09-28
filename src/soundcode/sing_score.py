@@ -149,12 +149,19 @@ def _f0(doc, notes, n: int) -> np.ndarray:
     return (440.0 * 2 ** ((cents - 6900) / 1200)).astype(np.float32)
 
 
+def song_duration(doc, notes: list[tuple[float, float, int]]) -> float:
+    """The song's length for scoring: @duration if the .sc has one, else the
+    vocal stream's own last note plus a 1 s pad. Shared by `build()` and
+    `sing.sing()`'s "no lyrics" guard so the "past the end" rule can't diverge."""
+    return doc.duration or (max((b for _, b, _ in notes), default=1.0) + 1.0)
+
+
 def build(doc, duration: float | None = None, durations: str = "heuristic") -> Score:
     """durations: "heuristic" (70 ms consonants, vowel fills the note) or "model"
     (the bank's own duration model, rescaled inside each word's span)."""
     stream = vocal_stream(doc)
     notes = vocal_notes(doc, stream)
-    dur = duration or doc.duration or (max((b for _, b, _ in notes), default=1.0) + 1.0)
+    dur = duration or song_duration(doc, notes)
     n = int(round(dur * SR / HOP))
     warn: list[str] = []
     ws = words(doc)

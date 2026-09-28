@@ -396,6 +396,29 @@ def test_sing_raises_novocal_when_all_words_are_past_the_end(tmp_path, monkeypat
         sing.sing(doc, tmp_path / "ref.wav")
 
 
+def test_sing_without_duration_still_sings_when_there_are_real_lyrics(tmp_path, monkeypatch):
+    """A .sc with no @duration has doc.duration == 0.0; the "no lyrics" guard
+    must fall back to the vocal stream's own note span (the same rule
+    sing_score.build() uses via song_duration), not treat every word as past
+    the end (fix round 1)."""
+    import soundfile as sf
+    doc = parse(SONG.replace("@duration 4.0\n", ""))
+    assert doc.duration == 0.0
+    ref = tmp_path / "ref.wav"
+    sf.write(str(ref), np.zeros(4410, np.float32), 44100)
+    calls = []
+    monkeypatch.setattr(sing.diffsinger, "render",
+                        lambda score, **k: calls.append("ds") or np.zeros(44100, np.float32))
+
+    def fake_convert(src, r, out, steps=30):
+        calls.append("vc")
+        sf.write(str(out), np.zeros(44100, np.float32), 44100)
+        return out
+    monkeypatch.setattr(sing.seedvc, "convert", fake_convert)
+    p, warns = sing.sing(doc, ref, cache=tmp_path / "c", singer="diffsinger")
+    assert p.exists() and calls == ["ds", "vc"]
+
+
 def test_render_with_vocals_mixes_the_choir_stream_via_gm_when_it_has_no_words(monkeypatch, capsys):
     """The instrumental-only fallback (NoVocalError caught in render_sf) must
     still include the vocal-family stream, rendered as its GM instrument."""

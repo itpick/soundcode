@@ -63,9 +63,11 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
     # No sung words, no singing: a vocal-family stream (matched via meta stem=
     # lead_vocals) with notes but no lyrics is a choir/pad line, not a voice to
     # clone onto -- it renders as its instrument instead (task 5a). Resolve the
-    # vocal stream first so "no vocal stream at all" keeps its own message.
-    ss.vocal_stream(doc)
-    dur = doc.duration or 0.0
+    # vocal stream first so "no vocal stream at all" keeps its own message, and
+    # use song_duration() -- the same "past the end" rule ss.build() uses --
+    # so a .sc with no @duration doesn't have every word filtered.
+    stream = ss.vocal_stream(doc)
+    dur = ss.song_duration(doc, ss.vocal_notes(doc, stream))
     if not any(w[0] < dur - 0.05 for w in ss.words(doc)):
         raise ss.NoVocalError("the vocal stream has no lyrics; rendered as its instrument")
 
