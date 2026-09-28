@@ -14,6 +14,7 @@ stream-level estimate from a proxy check.
 from __future__ import annotations
 
 import math
+import re
 import shutil
 import sys
 import tempfile
@@ -837,6 +838,13 @@ def lyric_cells(words: list[tuple], grid: dict) -> list[str]:
     return cells
 
 
+# Whisper hallucinates these on silence/instrumental audio; a lone one, heard
+# with low confidence, is not a lyric.
+HALLUCINATIONS = {"thank you", "thanks for watching", "thank you for watching", "you", "bye",
+                  "subtitles by the amaraorg community"}
+NO_SPEECH_MAX = 0.6
+
+
 def stage_lyrics(stem: Path | None, sr: int, grid: dict,
                  lines: list | None = None, duration: float = 0.0,
                  offset: float | None = None) -> Stage:
@@ -855,9 +863,11 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
             model = WhisperModel(ASR_MODEL, device="cpu", compute_type="int8",
                                  download_root=asr_download_root())
             st.src = f"whisper:{ASR_MODEL}"
-            segments, _ = model.transcribe(str(stem), word_timestamps=True)
+            segments, _ = model.transcribe(str(stem), word_timestamps=True,
+                                           condition_on_previous_text=False)
+            kept = [s for s in segments if getattr(s, "no_speech_prob", 0.0) <= NO_SPEECH_MAX]
             words = [(w.start, w.end, w.word.strip(), w.probability)
-                     for s in segments for w in (s.words or [])]
+                     for s in kept for w in (s.words or [])]
         else:
             import whisper
             model = whisper.load_model("base")
@@ -867,6 +877,15 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
     except Exception as exc:                             # noqa: BLE001
         st.warns.append(f"transcription failed: {exc}")
         return st
+
+    if words:
+        transcript = " ".join(w[2] for w in words)
+        norm = re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", "", transcript.lower())).strip()
+        mean_prob = float(np.mean([w[3] for w in words]))
+        if norm in HALLUCINATIONS and mean_prob < 0.5:
+            st.warns.append(f'ASR heard only "{transcript}" (a common hallucination on '
+                            "non-speech); no lyrics")
+            words = []
 
     reference = None
     if lines:
