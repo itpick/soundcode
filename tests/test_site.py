@@ -446,3 +446,16 @@ def test_missing_render_log_forces_a_rerender(tmp_path, monkeypatch):
     n = len(calls)
     site.build(root, root / "site", root / "work", run=run, songs=[song])
     assert any("render" in c for c in calls[n:])
+
+
+def test_site_is_prepped_for_private_cloudflare_hosting():
+    site_dir = Path(__file__).resolve().parents[1] / "site"
+    headers = (site_dir / "_headers").read_text()
+    assert "X-Robots-Tag: noindex" in headers and "Content-Security-Policy: default-src 'self'" in headers
+    assert (site_dir / "robots.txt").read_text().strip().endswith("Disallow: /")
+    readme = (site_dir / "README.md").read_text()
+    assert "Cloudflare Access" in readme and "Build output directory: **`site`**" in readme
+    # the page loads nothing from other origins, so the strict CSP cannot break it
+    html = (site_dir / "index.html").read_text()
+    assert "<script src=" not in html and "<link rel=\"stylesheet\"" not in html
+    assert all(f.stat().st_size < 25 * 1024 * 1024 for f in site_dir.rglob("*") if f.is_file())

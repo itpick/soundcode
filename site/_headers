@@ -1,0 +1,13 @@
+# Cloudflare Pages response headers (ignored by `python -m http.server`).
+# The page is private: keep it out of search engines, and allow only its own files.
+/*
+  X-Robots-Tag: noindex, nofollow
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
+
+/media/*
+  Cache-Control: public, max-age=86400
+
+/data.json
+  Cache-Control: no-cache
