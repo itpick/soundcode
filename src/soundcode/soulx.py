@@ -175,16 +175,27 @@ def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:
         if b0 >= t0 + want_s * 0.6 and a1 - b0 >= 0.2:
             end = (b0 + a1) / 2
             break
-    return t0, min(end, t0 + 12.0)
+    return t0, min(end, t0 + max(12.0, want_s * 1.25))
 
 
 CONTROL = "melody"          # "melody" (f0 curve) or "score" (MIDI notes)
-PROMPT_S = 8.0
+PROMPT_S = 12.0
+SEED = 0                    # SoulX is a diffusion model: fixed so re-renders and A/B tests repeat
+ALIGN = 2                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
+
+
+def settings() -> dict:
+    """Everything besides the .sc and the reference that changes a SoulX render (for the cache key)."""
+    return {"control": CONTROL, "prompt_s": PROMPT_S, "seed": SEED, "align": ALIGN}
 
 
 def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None,
-           control: str | None = None, prompt_s: float | None = None) -> np.ndarray:
-    """Sing the whole vocal remotely; returns mono float32 at 44.1 kHz."""
+           control: str | None = None, prompt_s: float | None = None,
+           n_steps: int | None = None, cfg: float | None = None, seed: int | None = SEED) -> np.ndarray:
+    """Sing the whole vocal remotely; returns mono float32 at 44.1 kHz.
+
+    `n_steps`/`cfg` override SoulX's diffusion steps and guidance scale (config defaults 32 / 3).
+    `seed` fixes torch/numpy/random so a render is repeatable; None leaves it random."""
     import librosa
     import soundfile as sf
 
@@ -220,11 +231,26 @@ def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None,
                 "    for s in d: s['phoneme']=' '.join(g(s['text'].split(),'English'))\n"
                 "    json.dump(d,open(p,'w'))\n")
         (tmp / "fill.py").write_text(fill)
+        run_py = ("import runpy,sys,random; import numpy, torch\n"
+                  "s=int(sys.argv.pop(1))\n"
+                  "if s>=0: random.seed(s); numpy.random.seed(s); torch.manual_seed(s)\n"
+                  "runpy.run_module('cli.inference', run_name='__main__')\n")
+        (tmp / "run.py").write_text(run_py)
+        conf = "soulxsinger/config/soulxsinger.yaml"
+        edit = ""
+        if n_steps is not None or cfg is not None:
+            subs = []
+            if n_steps is not None:
+                subs.append(f"-e 's/^\\( *n_steps:\\).*/\\1 {int(n_steps)}/'")
+            if cfg is not None:
+                subs.append(f"-e 's/^\\( *cfg:\\).*/\\1 {float(cfg)}/'")
+            edit = f"sed {' '.join(subs)} {conf} > ~/{job}/config.yaml && "
+            conf = f"~/{job}/config.yaml"
         remote = (f"cd {REMOTE_DIR} && export LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH "
-                  f"PYTHONPATH=$PWD && .venv/bin/python ~/{job}/fill.py ~/{job}/target.json ~/{job}/prompt.json && "
-                  f".venv/bin/python -m cli.inference --device cuda "
+                  f"PYTHONPATH=$PWD && {edit}.venv/bin/python ~/{job}/fill.py ~/{job}/target.json ~/{job}/prompt.json && "
+                  f".venv/bin/python ~/{job}/run.py {-1 if seed is None else int(seed)} --device cuda "
                   f"--model_path pretrained_models/SoulX-Singer/model.pt "
-                  f"--config soulxsinger/config/soulxsinger.yaml "
+                  f"--config {conf} "
                   f"--prompt_wav_path ~/{job}/prompt.wav --prompt_metadata_path ~/{job}/prompt.json "
                   f"--target_metadata_path ~/{job}/target.json "
                   f"--phoneset_path soulxsinger/utils/phoneme/phone_set.json "
@@ -232,7 +258,7 @@ def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None,
         out = tmp / "generated.wav"
         try:
             run([*ssh, f"mkdir -p {job}"], "mkdir")
-            run([*scp, *(str(tmp / f) for f in ("target.json", "prompt.json", "prompt.wav", "fill.py")),
+            run([*scp, *(str(tmp / f) for f in ("target.json", "prompt.json", "prompt.wav", "fill.py", "run.py")),
                  f"{host}:{job}/"], "upload")
             run([*ssh, remote], "inference", timeout=1800)
             run([*scp, f"{host}:{job}/out/generated.wav", str(out)], "download")
