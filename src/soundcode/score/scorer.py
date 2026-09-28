@@ -9,6 +9,10 @@ per slice, e.g. `level_diff_db_abs = |level_diff_db|`, `lag_ms_abs =
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import numpy as np
+
 from . import anchors
 
 # part string -> anchors.json key (the metric set and floor/ceiling/weight/
@@ -182,3 +186,391 @@ def song_score(parts: dict, energy: dict, mix) -> float | None:
     if mix_score is None:
         return parts_score
     return 0.5 * parts_score + 0.5 * mix_score
+
+
+# --------------------------------------------------------------------------
+# score_song: from audio files to the nested result dict (Task 5)
+# --------------------------------------------------------------------------
+
+VOCAL_PARTS = ("lead_vocals", "backing_vocals")
+BASS_F0_FMIN = 30.0          # design doc: bass f0 via torchcrepe with fmin 30 Hz
+
+_WHISPER = None
+
+
+def _words(wav) -> list[tuple[str, float, float]]:
+    """faster-whisper `small` word stamps for `wav`: `[(word, start, end)]`.
+
+    The one place the scorer runs Whisper: `score_song` calls it once per
+    file and shares the result between `sung_wer` and `word_mae_s` (tests
+    monkeypatch it). The model is loaded once per process.
+    """
+    global _WHISPER
+    if _WHISPER is None:
+        from faster_whisper import WhisperModel
+
+        from ..lyrics import asr_download_root
+        _WHISPER = WhisperModel("small", device="cpu", compute_type="int8",
+                                download_root=asr_download_root())
+    segs, _ = _WHISPER.transcribe(str(wav), language="en", word_timestamps=True)
+    return [(w.word, float(w.start), float(w.end)) for s in segs for w in (s.words or [])]
+
+
+def _load_mono(path: Path):
+    import librosa
+
+    from .metrics import SR
+    y, _ = librosa.load(str(path), sr=SR, mono=True)
+    return y.astype(np.float32)
+
+
+def _load_stereo(path: Path, sr: int):
+    """(2, n) float32 at `sr`; a mono file is duplicated."""
+    import librosa
+
+    y, _ = librosa.load(str(path), sr=sr, mono=False)
+    if y.ndim == 1:
+        y = np.stack([y, y])
+    return y.astype(np.float32)
+
+
+def _trim(a, b):
+    """Unequal lengths: compare only the span both files cover."""
+    n = min(a.shape[-1], b.shape[-1])
+    return a[..., :n], b[..., :n]
+
+
+def _abs(v):
+    return None if v is None else abs(float(v))
+
+
+def _mean(vals):
+    vals = [float(v) for v in vals if v is not None]
+    return float(np.mean(vals)) if vals else None
+
+
+def _word_pairs(ref_words, est_words) -> list[tuple[float, float]]:
+    """(ref start, est start) for each word the two transcriptions agree on,
+    aligned with difflib on normalised words."""
+    import difflib
+
+    from ..compare import heard_words
+
+    def tokens(words):
+        out = []
+        for w, start, _end in words:
+            out += [(n, float(start)) for n in heard_words([w])]
+        return out
+
+    r, e = tokens(ref_words), tokens(est_words)
+    sm = difflib.SequenceMatcher(None, [w for w, _ in r], [w for w, _ in e], autojunk=False)
+    pairs = []
+    for blk in sm.get_matching_blocks():
+        for k in range(blk.size):
+            pairs.append((r[blk.a + k][1], e[blk.b + k][1]))
+    return pairs
+
+
+def _word_mae(pairs, a: float, b: float) -> float | None:
+    """Median |start difference| over matched words whose original start is in [a, b)."""
+    d = [abs(te - tr) for tr, te in pairs if a <= tr < b]
+    return float(np.median(d)) if d else None
+
+
+def _decay_ratio_err(ref_y, est_y, sr, vo_ref, vo_est, a, b) -> float | None:
+    """Mean over voices hit on both sides in [a, b) of |decay_est / decay_ref - 1|."""
+    from . import drums
+
+    errs = []
+    for v in drums.VOICES:
+        r = drums._in_range(np.asarray(vo_ref.get(v, [])), a, b)
+        e = drums._in_range(np.asarray(vo_est.get(v, [])), a, b)
+        if r.size == 0 or e.size == 0:
+            continue
+        dr, de = drums.decay_s(ref_y, sr, r), drums.decay_s(est_y, sr, e)
+        if dr and de is not None:
+            errs.append(abs(de / dr - 1.0))
+    return _mean(errs)
+
+
+def _width(seg) -> float | None:
+    """Stereo width: side RMS / (mid RMS + side RMS), on a (2, n) segment."""
+    if seg.shape[-1] == 0:
+        return None
+    left, right = seg[0].astype(np.float64), seg[1].astype(np.float64)
+    mid = np.sqrt(np.mean(((left + right) / 2) ** 2))
+    side = np.sqrt(np.mean(((left - right) / 2) ** 2))
+    return float(side / (mid + side)) if mid + side > 1e-12 else None
+
+
+def _lufs(seg, sr: int) -> float | None:
+    """Integrated loudness (pyloudnorm, BS.1770) of a (2, n) segment; None if
+    too short to gate (< 400 ms) or silent."""
+    import pyloudnorm
+
+    if seg.shape[-1] < int(0.4 * sr) + 1:
+        return None
+    with np.errstate(divide="ignore"):
+        v = pyloudnorm.Meter(sr).integrated_loudness(seg.T.astype(np.float64))
+    return float(v) if np.isfinite(v) else None
+
+
+def _seg(y, sr, a, b):
+    return y[..., max(int(a * sr), 0):max(int(b * sr), 0)]
+
+
+def _slice_entries(scored: list[dict], slcs, raws, silent_flags) -> list[dict]:
+    return [{**e, "a": s.a, "b": s.b, "silent": sil, "raw": raw}
+            for e, s, raw, sil in zip(scored, slcs, raws, silent_flags)]
+
+
+def _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, quiet) -> dict:
+    """`score_part` on the flat metric dicts, then annotate every slice entry
+    with its time span, its silent flag and every raw metric (anchored or not)."""
+    res = score_part(song_m, [(s.label, m) for s, m in zip(secs, sec_ms)],
+                     [(s.label, m) for s, m in zip(wins, win_ms)], part_type)
+    res["song"] = {**res["song"], "a": song_s.a, "b": song_s.b, "silent": False, "raw": song_m}
+    res["sections"] = _slice_entries(res["sections"], secs, sec_ms, quiet["sections"])
+    res["windows"] = _slice_entries(res["windows"], wins, win_ms, quiet["windows"])
+    # re-pick the worst section from the annotated entries (same rule as
+    # score_part: first lowest wins) so it carries its own span even when two
+    # sections share a label (e.g. two "verse"s)
+    scored = [e for e in res["sections"] if e["score"] is not None]
+    if scored:
+        w = min(scored, key=lambda e: e["score"])
+        res["worst"] = {"label": w["label"], "score": w["score"], "a": w["a"], "b": w["b"]}
+    return res
+
+
+def _lags(y_ref, y_est, sr, secs, wins, quiet):
+    """Per-window drift, per-section lag, and the song lag (mean |lag| over
+    the windows where the original is active): the whole-song
+    cross-correlation of a part that drifts progressively has no one lag."""
+    from . import align
+
+    dr = align.drift(y_ref, y_est, sr, list(wins) + list(secs))
+    win_dr, sec_dr = dr[:len(wins)], dr[len(wins):]
+    song_lag = _mean(abs(d["lag_ms"]) for d, q in zip(win_dr, quiet["windows"])
+                     if not q and d["lag_ms"] is not None)
+    return win_dr, [d["lag_ms"] for d in sec_dr], song_lag
+
+
+def _quiet(y_ref, sr, secs, wins) -> dict:
+    """Per section / window: True where the original is below the gate (not scored)."""
+    from . import slices
+    return {"sections": [not slices.active(y_ref, sr, s.a, s.b) for s in secs],
+            "windows": [not slices.active(y_ref, sr, s.a, s.b) for s in wins]}
+
+
+def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, doc, song_s,
+                      secs, wins, drum_cache: Path) -> tuple[dict, list[dict]]:
+    """One active part with a rebuilt counterpart: every metric on every
+    slice. Heavy features (librosa, basic-pitch, torchcrepe, MERT, tsumugi,
+    Whisper) run once per file; the slices only index into them."""
+    from .. import compare
+    from . import drums, embed, metrics
+
+    part_type = PART_TYPE[key]
+    sr = metrics.SR
+    y_ref, y_est = _trim(y_ref, y_est)
+    pitched, f0 = key in metrics.NOTE_F1_PARTS, key in metrics.F0_PARTS
+    fmin = BASS_F0_FMIN if key == "bass" else 50.0
+    f_ref = metrics.Features.of(y_ref, sr, pitched, f0, f0_fmin=fmin)
+    f_est = metrics.Features.of(y_est, sr, pitched, f0, f0_fmin=fmin)
+    fr_ref, fr_est = embed.frames(ref_path), embed.frames(est_path)
+
+    quiet = _quiet(y_ref, sr, secs, wins)
+    win_dr, sec_lags, song_lag = _lags(y_ref, y_est, sr, secs, wins, quiet)
+
+    vo_ref = vo_est = None
+    if key == "drums":
+        vo_ref, vo_est = drums.voice_onsets(ref_path, drum_cache), drums.voice_onsets(est_path, drum_cache)
+    pairs = None
+    if key in VOCAL_PARTS:
+        w_ref, w_est = _words(ref_path), _words(est_path)
+        pairs = _word_pairs(w_ref, w_est)
+
+    def one(s, lag):
+        m = metrics.slice_metrics(f_ref, f_est, s, key)
+        m["level_diff_db_abs"] = _abs(m["level_diff_db"])
+        m["lag_ms"] = lag
+        m["lag_ms_abs"] = _abs(lag)
+        m["mert"] = embed.cosine(fr_ref, fr_est, s.a, s.b)
+        yr, ye = metrics._slice_y(f_ref, s.a, s.b), metrics._slice_y(f_est, s.a, s.b)
+        m["spectral_db"] = compare.spectral_db(yr, ye, sr) if yr.size and ye.size else None
+        if vo_ref is not None:
+            f1s = drums.voice_f1(vo_ref, vo_est, s.a, s.b)
+            m["drum_voice_f1"] = _mean(f1s.values())
+            m["drum_voice_f1_by_voice"] = f1s
+            m["decay_ratio_err"] = _decay_ratio_err(f_ref.y, f_est.y, sr, vo_ref, vo_est, s.a, s.b)
+        if pairs is not None:
+            m["word_mae_s"] = _word_mae(pairs, s.a, s.b)
+        return m
+
+    sec_ms = [{} if sil else one(s, lag) for s, lag, sil in zip(secs, sec_lags, quiet["sections"])]
+    win_ms = [{} if sil else one(s, d["lag_ms"]) for s, d, sil in zip(wins, win_dr, quiet["windows"])]
+    song_m = one(song_s, song_lag)
+    if key in VOCAL_PARTS:
+        song_m["voice_sim"] = compare.voice_similarity(f_ref.y, f_est.y, sr)
+        ws_est = compare.sung_wer(doc, est_path, words=w_est)
+        ws_ref = compare.sung_wer(doc, ref_path, words=w_ref)
+        song_m["sung_wer"], song_m["sung_wer_original"] = ws_est, ws_ref
+        song_m["sung_wer_excess"] = (max(0.0, ws_est - ws_ref)
+                                     if ws_est is not None and ws_ref is not None else None)
+
+    res = _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, quiet)
+    return res, win_dr
+
+
+def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[dict, list[dict]]:
+    """The rebuilt mix against the original mix: chroma, onset F1, lag, MERT,
+    LUFS-I and stereo width differences, spectral distance."""
+    import soundfile as sf
+
+    from .. import compare
+    from . import embed, metrics, slices
+
+    sr = metrics.SR
+    y_ref, y_est = _trim(_load_mono(original), _load_mono(rebuild_mix))
+    if not slices.active(y_ref, sr, song_s.a, song_s.b):
+        return score_part({}, [], [], "mix", silent=True), []
+    if not slices.active(y_est, sr, song_s.a, song_s.b):
+        return score_part({}, [], [], "mix", missing=True), []
+
+    st_sr = sf.info(str(original)).samplerate
+    st_ref, st_est = _trim(_load_stereo(original, st_sr), _load_stereo(rebuild_mix, st_sr))
+    f_ref = metrics.Features.of(y_ref, sr, False, False)
+    f_est = metrics.Features.of(y_est, sr, False, False)
+    fr_ref, fr_est = embed.frames(original), embed.frames(rebuild_mix)
+    quiet = _quiet(y_ref, sr, secs, wins)
+    win_dr, sec_lags, song_lag = _lags(y_ref, y_est, sr, secs, wins, quiet)
+
+    def one(s, lag):
+        m = metrics.slice_metrics(f_ref, f_est, s, "mix")
+        m["lag_ms"], m["lag_ms_abs"] = lag, _abs(lag)
+        m["mert"] = embed.cosine(fr_ref, fr_est, s.a, s.b)
+        yr, ye = metrics._slice_y(f_ref, s.a, s.b), metrics._slice_y(f_est, s.a, s.b)
+        m["spectral_db"] = compare.spectral_db(yr, ye, sr) if yr.size and ye.size else None
+        sr_, se_ = _seg(st_ref, st_sr, s.a, s.b), _seg(st_est, st_sr, s.a, s.b)
+        lr, le = _lufs(sr_, st_sr), _lufs(se_, st_sr)
+        m["lufs_diff"] = (le - lr) if lr is not None and le is not None else None
+        m["lufs_diff_abs"] = _abs(m["lufs_diff"])
+        wr, we = _width(sr_), _width(se_)
+        m["width_diff"] = abs(wr - we) if wr is not None and we is not None else None
+        return m
+
+    sec_ms = [{} if sil else one(s, lag) for s, lag, sil in zip(secs, sec_lags, quiet["sections"])]
+    win_ms = [{} if sil else one(s, d["lag_ms"]) for s, d, sil in zip(wins, win_dr, quiet["windows"])]
+    song_m = one(song_s, song_lag)
+    return _assemble("mix", song_s, secs, wins, song_m, sec_ms, win_ms, quiet), win_dr
+
+
+def _json_default(o):
+    if isinstance(o, np.generic):
+        return o.item()
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f"not JSON serialisable: {type(o)}")
+
+
+def score_song(original: Path, stems_dir: Path, sc: Path, parts_dir: Path,
+               rebuild_mix: Path, out_dir: Path, *, cache_dir: Path | None = None) -> dict:
+    """Score a rebuild against the original, per part, per section and per
+    20 s window, and write `scores.json` to `out_dir`.
+
+    - Parts come from `render_sf.PART_KEYS` (`residual` is never scored):
+      the original stem is `stems_dir/<key>.wav`, the rebuild
+      `parts_dir/<key>.wav`.
+    - A part whose original is below the gate for the whole song (or has no
+      stem) is `silent`; an active original whose rebuilt part is absent or
+      silent is `missing` (score 0, flagged).
+    - Unequal lengths are trimmed to the span both files cover.
+    - `cache_dir` holds the per-file tsumugi drum-voice cache (default: the
+      MERT cache directory, `out/bench/cache`).
+
+    Returns `{song, duration, parts, mix, score, worst, drift, energy, files}`.
+    """
+    import json
+
+    import soundfile as sf
+
+    from .. import compare
+    from ..parser import parse_file
+    from ..render_sf import PART_KEYS, PART_LABELS
+    from . import embed, metrics, slices
+
+    original, stems_dir, parts_dir = Path(original), Path(stems_dir), Path(parts_dir)
+    rebuild_mix, out_dir = Path(rebuild_mix), Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    drum_cache = Path(cache_dir) if cache_dir is not None else embed.CACHE_DIR
+
+    doc = parse_file(str(sc))
+    duration = float(sf.info(str(original)).duration)
+    song_s = slices.song(duration)
+    secs, wins = slices.sections(doc, duration), slices.windows(duration)
+
+    parts: dict[str, dict] = {}
+    drift: dict[str, list] = {}
+    energy: dict[str, float] = {}
+    for key in PART_KEYS:
+        if key not in PART_TYPE:          # residual
+            continue
+        ref_path, est_path = stems_dir / f"{key}.wav", parts_dir / f"{key}.wav"
+        has_ref, has_est = ref_path.is_file(), est_path.is_file()
+        if not (has_ref or has_est):
+            continue
+        y_ref = _load_mono(ref_path) if has_ref else None
+        energy[key] = float(np.sum(np.square(y_ref, dtype=np.float64))) if has_ref else 0.0
+        ref_active = has_ref and slices.active(y_ref, metrics.SR, 0.0, duration)
+        y_est = _load_mono(est_path) if has_est and ref_active else None
+        est_active = y_est is not None and slices.active(y_est, metrics.SR, 0.0, duration)
+        if not ref_active:
+            res, dr = score_part({}, [], [], PART_TYPE[key], silent=True), []
+        elif not est_active:
+            res, dr = score_part({}, [], [], PART_TYPE[key], missing=True), []
+        else:
+            res, dr = _score_part_audio(key, ref_path, est_path, y_ref, y_est, doc, song_s,
+                                        secs, wins, drum_cache)
+        # an original with no stem / below the gate, but a rebuilt part: noted, not scored
+        res["extra"] = bool(not ref_active and has_est)
+        res.update({"type": PART_TYPE[key], "label": PART_LABELS[key],
+                    "files": {"original": str(ref_path) if has_ref else None,
+                              "rebuild": str(est_path) if has_est else None}})
+        parts[key] = res
+        drift[key] = dr
+
+    total = sum(energy.values())
+    shares = {k: (v / total if total > 0 else 0.0) for k, v in energy.items()}
+    for k in parts:
+        parts[k]["energy"] = shares.get(k, 0.0)
+
+    has_mix = rebuild_mix.is_file()
+    if has_mix:
+        mix, drift["mix"] = _score_mix(original, rebuild_mix, song_s, secs, wins)
+    else:
+        mix, drift["mix"] = score_part({}, [], [], "mix", missing=True), []
+    mix.update({"type": "mix", "label": "Mix",
+                "files": {"original": str(original), "rebuild": str(rebuild_mix) if has_mix else None}})
+
+    worst = None
+    for key, res in parts.items():
+        if res["silent"]:
+            continue
+        if res["missing"]:
+            cand = {"part": key, "label": "not rebuilt", "score": 0.0, "a": 0.0, "b": duration}
+        elif res["worst"] is not None:
+            cand = {"part": key, **res["worst"]}
+        else:
+            continue
+        if worst is None or cand["score"] < worst["score"]:
+            worst = cand
+
+    result = {"song": original.stem, "duration": duration, "parts": parts, "mix": mix,
+              "score": song_score(parts, shares, mix), "worst": worst, "drift": drift,
+              "energy": shares,
+              "sections": [{"label": s.label, "a": s.a, "b": s.b} for s in secs],
+              "files": {"original": str(original), "sc": str(sc), "stems": str(stems_dir),
+                        "parts": str(parts_dir), "rebuild_mix": str(rebuild_mix)}}
+    (out_dir / "scores.json").write_text(json.dumps(compare.json_safe(result), indent=2,
+                                                    default=_json_default, allow_nan=False))
+    return result

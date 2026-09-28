@@ -35,6 +35,7 @@ score = [
     # Seed-VC pins the same version for the same reason (scripts/install_seedvc.sh).
     "transformers==4.46.3",   # MERT (m-a-p/MERT-v1-95M) frame embeddings
     "nnAudio",                # MERT's remote code
+    "pyloudnorm",             # score/scorer.py: mix LUFS-I difference
 ]
 
 [project.scripts]

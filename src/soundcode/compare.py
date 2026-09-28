@@ -213,14 +213,26 @@ def lyric_wer(doc) -> float | None:
     return wer(ref, _sc_words(doc)) if ref else None
 
 
-def sung_wer(doc, wav) -> float | None:
-    """How many of the .sc's words a listener (whisper-small) recovers from the sung vocal."""
-    from faster_whisper import WhisperModel
-
+def heard_words(words) -> list[str]:
+    """Whisper word tokens (`(word, start, end)` or bare strings) -> normalised words."""
     from .lyrics import normalise
+    raw = (w[0] if isinstance(w, (tuple, list)) else w for w in words)
+    return [n for w in raw for n in (normalise(x) for x in w.replace("-", " ").split()) if n]
+
+
+def sung_wer(doc, wav, words=None) -> float | None:
+    """How many of the .sc's words a listener (whisper-small) recovers from the sung vocal.
+
+    `words`: an already-made transcription of `wav` as `(word, start, end)`
+    tuples (the scorer shares one per file); when given, Whisper isn't run."""
     ref = _sung_words(doc)
     if not ref:
         return None
+    if words is not None:
+        return wer(ref, heard_words(words))
+    from faster_whisper import WhisperModel
+
+    from .lyrics import normalise
     from .lyrics import asr_download_root
     segs, _ = WhisperModel("small", device="cpu", compute_type="int8",
                            download_root=asr_download_root()).transcribe(
