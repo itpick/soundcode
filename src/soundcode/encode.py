@@ -877,8 +877,9 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
             import whisper
             model = whisper.load_model("base")
             res = model.transcribe(str(stem), word_timestamps=True)
+            kept = [s for s in res["segments"] if s.get("no_speech_prob", 0.0) <= NO_SPEECH_MAX]
             words = [(w["start"], w["end"], w["word"].strip(), w.get("probability", 0.8))
-                     for s in res["segments"] for w in s.get("words", [])]
+                     for s in kept for w in s.get("words", [])]
     except Exception as exc:                             # noqa: BLE001
         st.warns.append(f"transcription failed: {exc}")
         return st

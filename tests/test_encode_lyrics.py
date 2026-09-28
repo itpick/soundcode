@@ -106,3 +106,29 @@ def test_a_normal_transcript_is_unchanged(monkeypatch):
     assert st.ok is True
     assert "Walk" in _text(st) and "me" in _text(st) and "down" in _text(st)
     assert not st.warns
+
+
+def test_the_openai_whisper_fallback_also_drops_high_no_speech_prob_segments(monkeypatch):
+    """Task 5: only the faster-whisper branch had the no_speech_prob filter;
+    the openai-whisper fallback (used when faster_whisper is not installed)
+    must apply it too, using segment.get('no_speech_prob', 0.0)."""
+    import sys
+    import types
+
+    monkeypatch.setattr(enc, "_module_available", lambda name: name == "whisper")
+
+    class FakeWhisperModel:
+        def transcribe(self, path, **kwargs):
+            return {"segments": [
+                {"no_speech_prob": 0.9,
+                 "words": [{"start": 1.0, "end": 1.3, "word": " dropped", "probability": 0.9}]},
+                {"no_speech_prob": 0.1,
+                 "words": [{"start": 2.0, "end": 2.3, "word": " kept", "probability": 0.9}]},
+            ]}
+
+    fake_whisper = types.ModuleType("whisper")
+    fake_whisper.load_model = lambda name: FakeWhisperModel()
+    monkeypatch.setitem(sys.modules, "whisper", fake_whisper)
+
+    st = enc.stage_lyrics(Path("fake.wav"), 44100, GRID, None, 30.0)
+    assert "kept" in _text(st) and "dropped" not in _text(st)
