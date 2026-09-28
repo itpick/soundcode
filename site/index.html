@@ -461,7 +461,8 @@
         var b = chips[p.key];
         b.disabled = missing;
         if (missing) {
-          b.title = state.side === "rebuild" ? "not in the rebuild" : "not separated";
+          var note = state.side === "rebuild" ? p.rebuild_note : p.original_note;
+          b.title = note || (state.side === "rebuild" ? "not in the rebuild" : "not separated");
           b.setAttribute("aria-label", p.label + " — " + b.title);
         } else {
           b.removeAttribute("title");
@@ -742,6 +743,12 @@
     details.appendChild(pre);
     var dl = el("a", { cls: "dl", text: "Download .sc", href: song.sc, attrs: { download: "" } });
     details.appendChild(dl);
+    if (song.sizes.kit > 0) {
+      details.appendChild(el("p", {
+        cls: "files",
+        text: "Drum kit (hits cut from the recording) not included; the code plays with a General MIDI kit without it"
+      }));
+    }
     fetch(song.sc)
       .then(function (r) {
         if (!r.ok) throw new Error(song.sc + ": " + r.status);
@@ -809,8 +816,12 @@
       return r.json();
     })
     .then(renderPage)
-    .catch(function () {
-      showStatus("Open this page through a web server: python -m http.server -d site");
+    .catch(function (err) {
+      if (location.protocol === "file:") {
+        showStatus("Open this page through a web server: python -m http.server -d site");
+      } else {
+        showStatus("Could not load data.json (" + ((err && err.message) || err) + ")");
+      }
     });
 })();
 </script>

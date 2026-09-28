@@ -6,7 +6,15 @@ lives only in this repo, viewed locally.
 
 ## Build
 
+`build()` needs each clip's separated stems in `out/stems/<slug>/` first -- it reads the
+original parts from there, and a sung song's voice reference comes from `lead_vocals.wav`
+in that folder. `encode` does not create it, so run `separate` on every clip before building:
+
 ```
+.venv/bin/python -m soundcode.cli separate audio/test/discipline-30s.mp3
+.venv/bin/python -m soundcode.cli separate audio/test/lights_in_the_sky-30s.mp3
+.venv/bin/python -m soundcode.cli separate audio/test/999999-30s.mp3
+.venv/bin/python -m soundcode.cli separate audio/test/corona_radiata-30s.mp3
 .venv/bin/python scripts/build_site.py
 ```
 
