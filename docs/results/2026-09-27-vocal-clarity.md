@@ -33,7 +33,7 @@ It now counts only the words the singer is given; River's four "oh"s past the cl
 
 The misses are now scattered single words, and differ between seeds. Only "mercy" (heard as "murmurs") fails in every render, and "it is" vs "it's" counts as two errors.
 
-Held notes are within seed noise of no-hold on `sung_wer`, so they go to a listening check.
+Held notes are within seed noise of no-hold on `sung_wer`. **By ear the unheld 12 s render sounded better, so held notes were reverted.**
 The files to compare are in `~/Downloads/vocal-clarity/`:
 - `1-original-vocal`
 - `2-soulx-12s-prompt`
