@@ -813,13 +813,15 @@ def stage_contour(stem: Path | None, stem_name: str, mix: np.ndarray, sr: int) -
     return st
 
 
-def lyric_cells(words: list[tuple[float, float, str, float]], grid: dict) -> list[str]:
-    """Words at performed timing (3-decimal beats), with durations."""
+def lyric_cells(words: list[tuple], grid: dict) -> list[str]:
+    """Words at performed timing (3-decimal beats), with durations. A fifth
+    field, when present, is what the ASR actually heard (written as alt=)."""
     from . import tsumugi_sc as tsc
 
     beat_s = grid["bar_dur"] / 4
     cells, last = [], None
-    for start, end, word, prob in sorted(words, key=lambda w: w[0]):
+    for start, end, word, prob, *rest in sorted(words, key=lambda w: w[0]):
+        heard = rest[0] if rest else None
         if not word:
             continue
         if last is not None:
@@ -829,11 +831,13 @@ def lyric_cells(words: list[tuple[float, float, str, float]], grid: dict) -> lis
         dur = max(end - start, 0.05)
         d = f"{dur:.3f}s" if pos.startswith("@") else f"{dur / beat_s:.3f}b"
         mark = "" if prob >= 0.80 else f" ?{prob:.2f}"
-        cells.append(f'{pos} "{word}" {d}{mark}')
+        alt = f' alt="{heard}"' if heard and heard != word else ""
+        cells.append(f'{pos} "{word}" {d}{mark}{alt}')
     return cells
 
 
-def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
+def stage_lyrics(stem: Path | None, sr: int, grid: dict,
+                 reference: list | None = None) -> Stage:
     """Word-level lyrics from the vocal stem, if a Whisper backend is present."""
     st = Stage("text.vox", src="whisper")
     if stem is None or not grid:
@@ -845,7 +849,10 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
     try:
         if _module_available("faster_whisper"):
             from faster_whisper import WhisperModel
-            model = WhisperModel("base", device="cpu", compute_type="int8")
+            from .lyrics import ASR_MODEL, asr_download_root
+            model = WhisperModel(ASR_MODEL, device="cpu", compute_type="int8",
+                                 download_root=asr_download_root())
+            st.src = f"whisper:{ASR_MODEL}"
             segments, _ = model.transcribe(str(stem), word_timestamps=True)
             words = [(w.start, w.end, w.word.strip(), w.probability)
                      for s in segments for w in (s.words or [])]
@@ -859,6 +866,14 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
         st.warns.append(f"transcription failed: {exc}")
         return st
 
+    if reference:
+        from . import lyrics as ly
+        reconciled, ratio = ly.reconcile(words, reference)
+        if ratio >= 0.5:
+            words = reconciled
+            st.src = f"lrclib+{st.src.split(':', 1)[-1]}"
+        else:
+            st.warns.append(f"published lyrics did not match this recording (ratio {ratio:.2f}); ASR only")
     cells = lyric_cells(words, grid)
     for i in range(0, len(cells), 5):
         st.lines.append(" | ".join(cells[i:i + 5]))
@@ -872,7 +887,8 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict) -> Stage:
 # --------------------------------------------------------------------------
 
 def encode(path: str, out_path: str | None = None,
-           workdir: str | None = None, title: str | None = None) -> str:
+           workdir: str | None = None, title: str | None = None,
+           artist: str | None = None) -> str:
     """Analyse `path` and write a .sc file. Returns the .sc text."""
     src = Path(path)
     wd = Path(workdir or tempfile.mkdtemp(prefix="sc-")) / (src.stem + ".scw")
@@ -925,7 +941,14 @@ def encode(path: str, out_path: str | None = None,
         skipped if n in handled else
         stage_notes_poly(stems.get(n), n, grid, mix=mono_mix, sr=sr, stem_name=n)
         for n in ("other", "guitar", "piano"))
-    _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid)
+    from . import lyrics as ly
+    song_title, song_artist = ly.guess_title_artist(src, title, artist)
+    _log(f"published lyrics: {song_title!r} / {song_artist!r}")
+    ref_lines = ly.lookup(song_title, song_artist, None)
+    reference = ly.ref_words(ref_lines, 0.0, duration) if ref_lines else None
+    if ref_lines is None:
+        STEM_NOTES.append(f"no published lyrics found for {song_title!r} / {song_artist!r}; ASR only")
+    _log("lyrics");    text_st = stage_lyrics(stems.get("vocals"), sr, grid, reference)
     _log("mix");       mix_st = stage_mix(y, sr)
 
     bpm = grid.get("tempo", 0.0)

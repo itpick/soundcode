@@ -8,6 +8,7 @@ cached under out/lyrics/ (gitignored: lyrics are copyrighted, private use).
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -15,6 +16,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 API = "https://lrclib.net/api"
+ASR_MODEL = os.environ.get("SOUNDCODE_ASR_MODEL", "large-v3-turbo")
+_EXTERNAL_MODELS = Path("/Volumes/ExFAT 2/infinity-engine/models/whisper")
+
+
+def asr_download_root() -> str | None:
+    """Big ASR weights live on the external drive when it is mounted."""
+    return str(_EXTERNAL_MODELS) if _EXTERNAL_MODELS.parent.is_dir() else None
 UA = "infinity-engine/0.1 (private research)"
 _LRC = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]\s*(.*)")
 
@@ -95,5 +103,45 @@ def ref_words(lines: list[Line], start: float, end: float) -> list[tuple[float |
     for ln in lines:
         if timed and (ln.t is None or not (start - 1.0 <= ln.t <= end)):
             continue
-        out += [(ln.t, w) for w in (normalise(x) for x in ln.text.split()) if w]
+        out += [(ln.t, w) for w in (normalise(x) for x in ln.text.replace("-", " ").split()) if w]
     return out
+def reconcile(asr: list[tuple[float, float, str, float]],
+              ref: list[tuple[float | None, str]]):
+    """Reference words with ASR timing. Returns (words, ratio); below 0.5 the
+    reference is judged not to match this recording and ASR is kept as heard."""
+    import difflib
+
+    a = [normalise(w[2]) for w in asr]
+    b = [w for _, w in ref]
+    sm = difflib.SequenceMatcher(a=a, b=b, autojunk=False)
+    ratio = sm.ratio()
+    if ratio < 0.5 or not ref:
+        return [(s, e, w, p, None) for s, e, w, p in asr], ratio
+    out: list[tuple[float, float, str, float, str | None]] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            out += [(asr[i][0], asr[i][1], b[j1 + (i - i1)], max(asr[i][3], 0.9), None)
+                    for i in range(i1, i2)]
+        elif tag == "replace":
+            n = max(i2 - i1, j2 - j1)
+            for k in range(n):
+                if k < i2 - i1 and k < j2 - j1:
+                    s, e, heard, p = asr[i1 + k]
+                    out.append((s, e, b[j1 + k], 0.7, normalise(heard) or None))
+                elif k < j2 - j1:                                      # extra reference word
+                    out.append((None, None, b[j1 + k], 0.5, None))
+                else:                                                  # extra ASR word
+                    s, e, heard, p = asr[i1 + k]
+                    out.append((s, e, heard, p, None))
+        elif tag == "delete":                                          # ASR only: ad-lib
+            out += [(asr[i][0], asr[i][1], asr[i][2], asr[i][3], None) for i in range(i1, i2)]
+        else:                                                          # insert: reference only
+            out += [(None, None, b[j], 0.5, None) for j in range(j1, j2)]
+    # time the reference-only words between their neighbours
+    for k, w in enumerate(out):
+        if w[0] is None:
+            prev = next((x[1] for x in reversed(out[:k]) if x[1] is not None), 0.0)
+            nxt = next((x[0] for x in out[k + 1:] if x[0] is not None), prev + 0.4)
+            span = max(nxt - prev, 0.1)
+            out[k] = (prev, prev + span, w[2], 0.5, None)
+    return out, ratio

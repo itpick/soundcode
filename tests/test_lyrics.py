@@ -61,3 +61,57 @@ def test_ref_words_keep_only_the_clip_window():
              ly.Line(40.0, "Walk me down to the harbor")]
     words = [w for _, w in ly.ref_words(lines, 0.0, 30.0)]
     assert words[:3] == ["walk", "me", "down"] and "high" in words and words.count("harbor") == 1
+
+
+# --- reconcile -------------------------------------------------------------------------------
+
+ASR = [(1.0, 1.3, "walk", 0.9), (1.3, 1.5, "me", 0.95), (1.5, 1.8, "down", 0.9), (1.8, 2.0, "to", 0.9),
+       (2.0, 2.2, "the", 0.9), (2.2, 2.9, "harder", 0.6),                  # misheard 'harbor'
+       (3.0, 3.3, "yeah", 0.7)]                                           # ad-lib
+REF = [(1.0, w) for w in "walk me down to the harbor".split()]
+
+
+def test_reconcile_fixes_mishearings_and_keeps_adlibs():
+    words, ratio = ly.reconcile(ASR, REF)
+    texts = [w[2] for w in words]
+    assert texts == ["walk", "me", "down", "to", "the", "harbor", "yeah"]
+    harbor = words[5]
+    assert harbor[0] == 2.2 and harbor[4] == "harder"                     # ASR timing, alt kept
+    assert words[6][3] == 0.7 and ratio > 0.7
+
+
+def test_missed_reference_words_are_interpolated_and_marked():
+    asr = [w for w in ASR if w[2] != "to"]
+    words, _ = ly.reconcile(asr, REF)
+    to = next(w for w in words if w[2] == "to")
+    assert 1.8 <= to[0] <= 2.0 and to[3] == 0.5
+
+
+def test_wrong_recording_falls_back_to_asr():
+    ref = [(1.0, w) for w in "completely different words about nothing here".split()]
+    words, ratio = ly.reconcile(ASR, ref)
+    assert ratio < 0.5 and [w[2] for w in words] == [w[2] for w in ASR]
+
+
+def test_repeated_chorus_stays_monotonic():
+    asr = [(float(i), float(i) + 0.4, w, 0.9) for i, w in enumerate("la la land la la land".split())]
+    ref = [(None, w) for w in "la la land la la land".split()]
+    words, _ = ly.reconcile(asr, ref)
+    assert [w[0] for w in words] == sorted(w[0] for w in words) and len(words) == 6
+
+
+def test_lyric_cells_carry_the_heard_word_as_alt():
+    from soundcode import encode as enc
+    from soundcode.parser import parse
+    grid = {"downbeat": 1.0, "bar_dur": 2.0}
+    cells = enc.lyric_cells([(1.5, 1.9, "harbor", 0.7, "harder")], grid)
+    assert cells == ['1:2.000 "harbor" 0.800b ?0.70 alt="harder"']
+    ev = parse('%sc 0.3\n\n:text.vox\n' + cells[0] + "\n").stream("text.vox").events[0]
+    assert ev.text == "harbor" and ev.alt == "harder" and ev.dur == "0.800b"
+
+
+def test_hyphenated_vocables_split_and_alts_are_clean():
+    words = [w for _, w in ly.ref_words([ly.Line(1.0, "Deep water, oh-oh-oh-oh")], 0, 30)]
+    assert words == ["deep", "water", "oh", "oh", "oh", "oh"]
+    out, _ = ly.reconcile([(1.0, 1.4, "delight.", 0.6)], [(1.0, "life")])
+    assert out[0][4] in (None, "delight")
