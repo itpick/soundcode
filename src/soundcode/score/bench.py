@@ -273,8 +273,10 @@ def _render_readme(lines: list[dict]) -> str:
                 out.append(f"| {name} | {part} | {_fmt(pd.get('what'))} | {_fmt(pd.get('sound'))} | "
                            f"{_fmt(pd.get('dyn'))} | {_fmt(pd.get('score'))} |{_fmt_delta(b, a)} |")
         out.append("")
+        # largest gain / worst regression first: sort by delta (after - before),
+        # descending for improvements, ascending (most negative first) for regressions
         improved = sorted((c for c in changes if c[3] - c[2] >= 5), key=lambda c: c[2] - c[3])
-        regressed = sorted((c for c in changes if c[3] - c[2] <= -5), key=lambda c: c[2] - c[3])
+        regressed = sorted((c for c in changes if c[3] - c[2] <= -5), key=lambda c: c[3] - c[2])
         out.append("### Improved (≥ +5)")
         out += ([f"- {s} {p}: {b:.0f} → {a:.0f} ({a - b:+.0f})" for s, p, b, a in improved]
                if improved else ["_none_"])

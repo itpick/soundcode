@@ -284,7 +284,9 @@ def main(argv: list[str] | None = None) -> int:
                     if float(np.abs(y).max()) > 1e-4:
                         sf.write(str(parts_dir / f"{key}.wav"), y, sr, subtype="PCM_16")
 
-            result = scorer.score_song(original, stems_dir, sc_path, parts_dir, rebuild, out_dir)
+            cache_dir = (Path("out") / "bench" / "cache").resolve()
+            result = scorer.score_song(original, stems_dir, sc_path, parts_dir, rebuild, out_dir,
+                                       cache_dir=cache_dir)
             print(score_report.table(result))
             report_path = score_report.html(result, out_dir)
             print(f"report: {report_path}")

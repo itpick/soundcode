@@ -225,6 +225,30 @@ def test_diff_with_no_previous_line_is_empty():
     assert bench.diff(None, {"tier": "A", "songs": {}}) == []
 
 
+def _bullets(section: str) -> list[str]:
+    return [ln[2:].split(":")[0].strip() for ln in section.splitlines() if ln.startswith("- ")]
+
+
+def test_readme_sorts_the_worst_regression_and_biggest_improvement_first():
+    prev = {"date": "d0", "label": "prev", "commit": "c0", "tier": "A", "songs": {
+        "improve-small": {"score": 70.0, "worst": None, "parts": {}},
+        "improve-big": {"score": 70.0, "worst": None, "parts": {}},
+        "regress-small": {"score": 70.0, "worst": None, "parts": {}},
+        "regress-big": {"score": 70.0, "worst": None, "parts": {}},
+    }}
+    cur = {"date": "d1", "label": "cur", "commit": "c1", "tier": "A", "songs": {
+        "improve-small": {"score": 75.0, "worst": None, "parts": {}},    # +5
+        "improve-big": {"score": 90.0, "worst": None, "parts": {}},      # +20
+        "regress-small": {"score": 65.0, "worst": None, "parts": {}},    # -5
+        "regress-big": {"score": 40.0, "worst": None, "parts": {}},      # -30
+    }}
+    readme = bench._render_readme([prev, cur])
+    improved = readme.split("### Improved")[1].split("### Regressed")[0]
+    regressed = readme.split("### Regressed")[1]
+    assert _bullets(improved) == ["improve-big song", "improve-small song"]
+    assert _bullets(regressed) == ["regress-big song", "regress-small song"]
+
+
 # --------------------------------------------------------------------------
 # run_bench: the two-run sequence
 # --------------------------------------------------------------------------
@@ -386,9 +410,16 @@ def test_cli_score_renders_scores_and_prints_the_table(tmp_path, monkeypatch):
 
     monkeypatch.setattr("soundcode.render_sf.render_parts", fake_render_parts)
     result = _mk_result("song", 88.0, {"lead_vocals": 90.0})
-    monkeypatch.setattr(real_scorer, "score_song",
-                        lambda *a, **k: result)
+    seen = {}
+
+    def fake_score_song(*a, **k):
+        seen.update(k)
+        return result
+
+    monkeypatch.setattr(real_scorer, "score_song", fake_score_song)
     out_dir = tmp_path / "score-out"
     assert cli.main(["score", str(original), str(sc), "--out", str(out_dir)]) == 0
     assert rendered.get("called")
     assert (out_dir / "report.html").exists()
+    assert "cache_dir" in seen and Path(seen["cache_dir"]).is_absolute()
+    assert Path(seen["cache_dir"]) == (Path("out") / "bench" / "cache").resolve()
