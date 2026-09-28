@@ -88,6 +88,13 @@ The anchors live in `src/soundcode/score/anchors.json` (committed). `soundcode b
 
 Every song and every part reports its **worst section** beside its mean.
 
+### Amendment (2026-09-28, after the first real calibration)
+
+The first real validation run failed on the off-key Discipline vocal: 70.8 against 75.5 for the fixed one, where a gap of at least 30 is required. The cause is the floor: different-song floors for error-size metrics sit far past the point where the ear calls something wrong (pitch 747 c, lag 758 ms, word timing 7.5 s). The scorer changes three ways:
+- **Perceptual floor caps.** `f0_cents` floor ≤ 100 c (a semitone off scores 0), `lag_ms_abs` ≤ 100 ms, `word_mae_s` ≤ 0.5 s. Calibration never sets a floor looser than its cap.
+- **Pitch weighs more.** `f0_cents` weighs 3 in the vocal and bass What axes.
+- **Axes combine by a weighted geometric mean.** The part score is the weighted geometric mean of the axes (weights 0.4 / 0.4 / 0.2, renormalised over the axes that exist, each axis floored at 1). A part that fails one axis, such as wrong notes with the right voice, can no longer average out to "fine".
+
 ## Benchmark set
 
 | Tier | Songs | Why |
