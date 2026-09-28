@@ -232,3 +232,6 @@ def test_page_reads_data_json_safely():
     for key in ("sizes", "ratios", "sc_gz", "with_borrowed", "singer", "license_url", "totals"):
         assert key in html
     assert "<script src=" not in html                        # no external scripts
+    sc_fetch = html[html.index("fetch(song.sc)"):html.index("fetch(song.sc)") + 200]
+    assert "r.ok" in sc_fetch                                 # a failed .sc fetch is caught, not rendered raw
+    assert "four clips" not in html                           # no counts hardcoded outside data.json

@@ -148,7 +148,7 @@
   .size-strip {
     margin: 18px 0;
   }
-  .size-strip h3, .card .section-title {
+  .size-strip h3 {
     margin: 0 0 10px;
     font-size: 0.85rem;
     font-weight: 600;
@@ -256,7 +256,7 @@
 <div class="wrap">
   <header class="hero">
     <h1>Sound to code</h1>
-    <p class="tagline">A song goes in, a text "sound code" comes out — and the song is rebuilt from that code alone. These four clips show the original next to the rebuild, and how small the code really is.</p>
+    <p class="tagline">A song goes in, a text "sound code" comes out — and the song is rebuilt from that code alone. Each clip below shows the original next to the rebuild, and how small the code really is.</p>
     <div class="totals" id="totals"></div>
     <div id="status"></div>
   </header>
@@ -317,13 +317,17 @@
 
     var orig = el("div", { cls: "player" });
     orig.appendChild(el("h3", { text: "Original (30 s)" }));
-    var origAudio = el("audio", { attrs: { controls: "", preload: "none", src: song.original } });
+    var origAudio = el("audio", {
+      attrs: { controls: "", preload: "none", src: song.original, "aria-label": "Original — " + song.title }
+    });
     orig.appendChild(origAudio);
     row.appendChild(orig);
 
     var rebuilt = el("div", { cls: "player" });
     rebuilt.appendChild(el("h3", { text: "Rebuilt from code" }));
-    var rebuiltAudio = el("audio", { attrs: { controls: "", preload: "none", src: song.rebuild } });
+    var rebuiltAudio = el("audio", {
+      attrs: { controls: "", preload: "none", src: song.rebuild, "aria-label": "Rebuilt from code — " + song.title }
+    });
     rebuilt.appendChild(rebuiltAudio);
     row.appendChild(rebuilt);
 
@@ -405,7 +409,10 @@
     var dl = el("a", { cls: "dl", text: "Download .sc", href: song.sc, attrs: { download: "" } });
     details.appendChild(dl);
     fetch(song.sc)
-      .then(function (r) { return r.text(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error(song.sc + ": " + r.status);
+        return r.text();
+      })
       .then(function (t) { pre.textContent = t; })
       .catch(function () { pre.textContent = "(could not load the code)"; });
     return details;
