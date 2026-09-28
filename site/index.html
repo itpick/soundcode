@@ -638,8 +638,12 @@
     seek.addEventListener("pointerdown", function () { dragging = true; });
     seek.addEventListener("pointerup", release);
     seek.addEventListener("pointercancel", release);
-    seek.addEventListener("keydown", function () { dragging = true; });
+    var SEEK_KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"];
+    seek.addEventListener("keydown", function (e) {
+      if (SEEK_KEYS.indexOf(e.key) >= 0) dragging = true;   // not Tab: its keyup lands elsewhere
+    });
     seek.addEventListener("keyup", release);
+    seek.addEventListener("blur", function () { dragging = false; });
     seek.addEventListener("input", function () {
       time.textContent = fmtTime(seekValue()) + " / " + fmtTime(state.duration);
     });

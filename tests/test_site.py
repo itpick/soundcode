@@ -247,6 +247,7 @@ def test_page_reads_data_json_safely():
     # the seek thumb follows playback unless the user is dragging it (focus is not dragging)
     assert "pointerdown" in html and 'seek.addEventListener("change"' in html
     assert "activeElement" not in html
+    assert 'seek.addEventListener("blur"' in html               # Tab away never leaves it "dragging"
 
 
 def test_build_lists_parts_from_both_sides(tmp_path, monkeypatch):
