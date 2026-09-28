@@ -25,6 +25,8 @@ encode = [
     "setuptools<80",          # webrtcvad (resemblyzer) still imports pkg_resources
     "matplotlib",
     "pedalboard>=0.9",
+    "mir_eval",                # compare.py, score/metrics.py, score/drums.py: onset/note F1
+    "pretty_midi",             # tsumugi_sc.py, score/drums.py: MIDI reading
 ]
 # Benchmark scorer. See docs/superpowers/specs/2026-09-28-benchmark-scorer-design.md.
 score = [

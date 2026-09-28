@@ -5,15 +5,40 @@ allowed for private research) is loaded once per process — from the external
 drive when mounted (`scripts/install_mert.sh`), else the HF cache — and run
 on 24 kHz mono audio in `CHUNK_S`-second chunks so memory stays bounded on
 full songs; hidden states are averaged over every transformer layer to get
-one 768-dim vector per frame at MERT's ~75 Hz frame rate. `frames` caches its
-result to `out/bench/cache/<sha1>.mert.npy`, keyed by the source file's
-content.
+one 768-dim vector per frame at MERT's ~75 Hz frame rate.
+
+MERT's feature encoder is a stack of *valid* (unpadded) convolutions, so a
+chunk run on its own loses a little over ~1 frame of context at its own
+edges compared to what a continuous pass over the same span would produce.
+Naively concatenating independently-run chunks therefore drifts by about a
+frame per chunk boundary (measured: +2 frames by 65 s / 2 boundaries on a
+real run) — on a full song that reaches a fifth of a second, enough to pool
+the wrong frames in `cosine`. `_frames_for_audio` fixes this with
+overlap-and-discard: each chunk (bar the song's own start/end) is run with
+`CONTEXT_S` of audio on both sides, and only the frames whose *nominal* time
+(`slice_start + frame_idx / FRAME_RATE`) falls inside the chunk's own
+`[start, end)` are kept — so frame `i` of the stitched array is always
+`i / FRAME_RATE` seconds in, independent of chunk boundaries, to within the
+one frame that is unavoidably lost at the true start and end of the file
+(no context available there, same as a single continuous pass would lose).
+
+`frames` caches its result to
+`out/bench/cache/<sha1>.<model-id-slug>-tf<transformers version>.mert.npy`,
+keyed by the source file's content AND the model identity, so a model or
+`transformers` upgrade can't silently reuse embeddings from the old one.
+
+Caveat: MERT's transformer layers use full self-attention over everything in
+one forward call, so a chunk's embeddings are never bit-identical to a
+continuous pass's — only frame *index* alignment is exact, not the values.
+See `_frames_for_audio` and `tests/test_score_drums_embed.py`'s
+`test_mert_chunking_matches_a_continuous_pass` for the measured gap.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -24,6 +49,7 @@ MODEL_DIR = (_DRIVE_MODELS / "mert") if _DRIVE_MODELS.exists() else None
 
 TARGET_SR = 24000
 CHUNK_S = 30.0
+CONTEXT_S = 1.0          # overlap kept (then discarded) on each side of an internal chunk boundary
 FRAME_RATE = 75.0
 CACHE_DIR = Path("out/bench/cache")
 
@@ -46,8 +72,29 @@ def _model_path() -> str:
     return os.environ.get("SOUNDCODE_MERT_MODEL", MODEL_ID)
 
 
+def _cache_tag() -> str:
+    """`<model-id-slug>-tf<transformers version>`: the cache key's model half."""
+    import transformers as _tf
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", MODEL_ID).strip("-")
+    return f"{slug}-tf{_tf.__version__}"
+
+
+def _cache_path(sha1: str) -> Path:
+    return CACHE_DIR / f"{sha1}.{_cache_tag()}.mert.npy"
+
+
 def _load():
-    """Load the model + feature extractor once per process; cache in globals."""
+    """Load the model + feature extractor once per process; cache in globals.
+
+    The extractor's own `do_normalize` is turned off: it normalizes whatever
+    array it is given to zero mean / unit variance, computed from THAT array
+    alone — so the same underlying samples would get a different scale
+    depending on whether they arrived as part of a 32 s chunk or a whole
+    song. `_normalize` applies that same formula once, over the whole file,
+    before chunking, so chunked and continuous processing see identical
+    values for identical samples.
+    """
     global _MODEL, _EXTRACTOR, _DEVICE
     if _MODEL is not None:
         return _MODEL, _EXTRACTOR, _DEVICE
@@ -58,11 +105,19 @@ def _load():
     path = _model_path()
     model = AutoModel.from_pretrained(path, trust_remote_code=True)
     extractor = Wav2Vec2FeatureExtractor.from_pretrained(path, trust_remote_code=True)
+    extractor.do_normalize = False
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     model = model.to(device).eval()
 
     _MODEL, _EXTRACTOR, _DEVICE = model, extractor, device
     return _MODEL, _EXTRACTOR, _DEVICE
+
+
+def _normalize(y: np.ndarray) -> np.ndarray:
+    """Zero-mean, unit-variance — the same formula the extractor's own
+    (now disabled) `do_normalize` uses, applied once over the whole file."""
+    y64 = np.asarray(y, dtype=np.float64)
+    return ((y64 - y64.mean()) / np.sqrt(y64.var() + 1e-7)).astype(np.float32)
 
 
 def _load_audio(wav: Path) -> np.ndarray:
@@ -73,7 +128,8 @@ def _load_audio(wav: Path) -> np.ndarray:
 
 
 def _run_chunk(chunk: np.ndarray) -> np.ndarray:
-    """One chunk -> (T, 768): hidden states averaged over every layer."""
+    """One ALREADY-NORMALIZED chunk (see `_normalize`) -> (T, 768): hidden
+    states averaged over every layer."""
     import torch
 
     model, extractor, device = _load()
@@ -86,23 +142,53 @@ def _run_chunk(chunk: np.ndarray) -> np.ndarray:
     return avg.to("cpu").float().numpy()
 
 
+def _frames_for_audio(y: np.ndarray) -> np.ndarray:
+    """Chunk `y` (24 kHz mono) through the model with overlap-and-discard.
+
+    Each chunk [start, end) is run together with up to `CONTEXT_S` of extra
+    audio on each side (clamped at the song's own start/end, where there is
+    no neighboring audio to borrow). The model's actual output length for
+    that padded slice gives each of its frames a nominal time
+    (`pad_start_time + frame_idx / FRAME_RATE`); only the frames landing
+    inside the chunk's own [start, end) are kept, so frame `i` of the
+    stitched result is always `i / FRAME_RATE` seconds into `y`, and chunk
+    boundaries never accumulate drift.
+    """
+    n = y.size
+    if n == 0:
+        return np.zeros((0, 768), dtype=np.float32)
+    y = _normalize(y)
+
+    chunk_len = int(round(CHUNK_S * TARGET_SR))
+    context_len = int(round(CONTEXT_S * TARGET_SR))
+
+    parts = []
+    start = 0
+    while start < n:
+        end = min(start + chunk_len, n)
+        pad_start = max(start - context_len, 0)
+        pad_end = min(end + context_len, n)
+        out = _run_chunk(y[pad_start:pad_end])
+        if out.shape[0] > 0:
+            frame_times = pad_start / TARGET_SR + np.arange(out.shape[0]) / FRAME_RATE
+            own_a, own_b = start / TARGET_SR, end / TARGET_SR
+            keep = (frame_times >= own_a - 1e-6) & (frame_times < own_b - 1e-6)
+            parts.append(out[keep])
+        start = end
+
+    return np.concatenate(parts, axis=0) if parts else np.zeros((0, 768), dtype=np.float32)
+
+
 def frames(wav: Path) -> np.ndarray:
-    """MERT frame embeddings for `wav`: (T, 768) at ~75 Hz, cached by sha1."""
+    """MERT frame embeddings for `wav`: (T, 768) at ~75 Hz, cached by sha1 + model identity."""
     wav = Path(wav)
     sha1 = _sha1_file(wav)
-    cache = CACHE_DIR / f"{sha1}.mert.npy"
+    cache = _cache_path(sha1)
     if cache.exists():
         return np.load(cache)
 
     y = _load_audio(wav)
-    chunk_len = int(round(CHUNK_S * TARGET_SR))
-    parts = []
-    for start in range(0, y.size, chunk_len):
-        chunk = y[start:start + chunk_len]
-        if chunk.size == 0:
-            continue
-        parts.append(_run_chunk(chunk))
-    out = np.concatenate(parts, axis=0) if parts else np.zeros((0, 768), dtype=np.float32)
+    out = _frames_for_audio(y)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     np.save(cache, out)
