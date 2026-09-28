@@ -73,3 +73,42 @@ def test_fx_line_round_trips_and_tolerates_garbage():
     bad = parse("%sc 0.3\n\n:notes.p\nfx  rt60=banana  wet=0.3  eq=1,2\n").stream("notes.p")
     h = fx.parse_fx(bad)
     assert h.wet == pytest.approx(0.3) and h.rt60 == fx.Fx(eq=[]).rt60 and h.eq == []
+
+
+# --- applying fx -------------------------------------------------------------------------------
+
+def test_eq_match_moves_the_spectrum_toward_the_target():
+    src = np.stack([noise(seed=3)] * 2, 1)
+    target = [int(round(v)) for v in fx.band_db(tilt(noise(seed=4), -6), SR)]
+    before = np.abs(fx.band_db(src.T, SR) - target)[fx.BANDS < 10000].mean()
+    out = fx.eq_match(src, SR, target)
+    after = np.abs(fx.band_db(out.T, SR) - target)[fx.BANDS < 10000].mean()
+    assert after < before * 0.5
+
+
+def test_eq_never_boosts_empty_bands():
+    t = np.arange(SR * 2) / SR
+    sine = np.stack([0.3 * np.sin(2 * np.pi * 440 * t)] * 2, 1).astype(np.float32)
+    out = fx.eq_match(sine, SR, [0] * 31)                   # flat target vs a single sine
+    assert np.abs(out).max() < 4 * np.abs(sine).max()
+
+
+def test_reverb_and_width_change_the_signal_but_not_its_start():
+    t = np.arange(SR) / SR
+    y = np.zeros((SR * 2, 2), np.float32)
+    y[:SR, 0] = y[:SR, 1] = 0.3 * np.sin(2 * np.pi * 220 * t) * (t < 0.2)
+    out = fx.apply(y, SR, fx.Fx(eq=[], rt60=1.5, wet=0.6, width=0.8, pan=0.0))
+    assert np.abs(out[int(0.4 * SR):int(0.8 * SR)]).mean() > np.abs(y[int(0.4 * SR):int(0.8 * SR)]).mean() + 1e-3
+    onset = lambda a: int(np.argmax(np.abs(a[:, 0]) > 1e-3))  # noqa: E731
+    assert abs(onset(out) - onset(y)) < int(0.002 * SR)
+
+
+def test_render_without_fx_lines_is_unchanged():
+    from soundcode import render_sf
+    sf2 = Path(__file__).resolve().parents[1] / "models" / "soundfonts" / "GeneralUser-GS.sf2"
+    if not sf2.exists():
+        pytest.skip("no SoundFont")
+    doc = parse("%sc 0.3\n@duration 2.0\n\n:notes.keys inst=keys.piano\n@0.0 C4 0.5s 100\n")
+    a = render_sf.render_streams(doc, sf2=sf2)
+    b = render_sf.render_streams(doc, sf2=sf2, no_fx=True)
+    np.testing.assert_array_equal(a["notes.keys"], b["notes.keys"])

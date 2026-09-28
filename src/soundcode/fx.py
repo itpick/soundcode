@@ -114,3 +114,57 @@ def parse_fx(stream) -> Fx | None:
                 continue
         return f
     return None
+
+
+EQ_LIMIT_DB = 15.0
+EQ_FLOOR_DB = 40.0          # no boost where the render is this far under its own peak band
+
+
+def eq_match(stereo: np.ndarray, sr: int, target_eq: list[int]) -> np.ndarray:
+    import librosa
+
+    if len(target_eq) != len(BANDS) or not np.any(stereo):
+        return stereo
+    have = band_db(stereo.T, sr)
+    gain = np.clip(np.asarray(target_eq, float) - have, -EQ_LIMIT_DB, EQ_LIMIT_DB)
+    # never lift bands the render has (almost) nothing in
+    gain = np.where(have <= -EQ_FLOOR_DB, np.minimum(gain, 0.0), gain)
+    n_fft = 4096
+    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
+    g = np.interp(np.log2(np.maximum(freqs, BANDS[0])), np.log2(BANDS), gain)
+    lin = 10 ** (g / 20)
+    out = np.empty_like(stereo)
+    for ch in range(stereo.shape[1]):
+        S = librosa.stft(stereo[:, ch], n_fft=n_fft, hop_length=n_fft // 4)
+        out[:, ch] = librosa.istft(S * lin[:, None], hop_length=n_fft // 4, length=stereo.shape[0])
+    return out.astype(np.float32)
+
+
+def _room_size(rt60: float) -> float:
+    return float(np.clip((rt60 - 0.1) / 3.0, 0.05, 0.98))
+
+
+def apply(stereo: np.ndarray, sr: int, f: Fx) -> np.ndarray:
+    import pedalboard as pb
+
+    y = eq_match(stereo, sr, f.eq) if f.eq else stereo
+    boards = []
+    have_crest = 20 * np.log10(np.abs(y).max() / (np.sqrt(np.mean(y.astype(np.float64) ** 2)) + 1e-20) + 1e-20)
+    if have_crest - f.crest > 3:
+        ratio = float(np.clip(1 + (have_crest - f.crest) / 6, 1.5, 6.0))
+        boards.append(pb.Compressor(threshold_db=-24, ratio=ratio, attack_ms=10, release_ms=120))
+    if f.wet > 0.02:
+        boards.append(pb.Reverb(room_size=_room_size(f.rt60), wet_level=f.wet,
+                                dry_level=1 - f.wet / 2, width=1.0))
+    if boards:
+        y = pb.Pedalboard(boards)(y.T.astype(np.float32), sr).T
+    mid, side = (y[:, 0] + y[:, 1]) / 2, (y[:, 0] - y[:, 1]) / 2
+    side_now = np.sqrt(np.mean(side ** 2)) / (np.sqrt(np.mean(mid ** 2)) + 1e-12)
+    want = f.width                                                 # side/mid ~ 1 - |corr|
+    side = side * (np.clip(want / side_now, 0, 4) if side_now > 1e-4 else 0.0)
+    if side_now <= 1e-4 and f.width > 0.05:                        # mono render: decorrelate
+        side = np.roll(mid, int(0.011 * sr)) * np.sqrt(want)
+    l, r = mid + side, mid - side
+    theta = (f.pan + 1) * np.pi / 4
+    out = np.stack([l * np.cos(theta) * np.sqrt(2), r * np.sin(theta) * np.sqrt(2)], 1)
+    return out.astype(np.float32)

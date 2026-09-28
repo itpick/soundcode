@@ -147,7 +147,7 @@ def _rms_db(y: np.ndarray, sr: int) -> float:
 
 
 def render_streams(doc: Document, sr: int | None = None,
-                   sf2: Path | None = None) -> dict[str, np.ndarray]:
+                   sf2: Path | None = None, no_fx: bool = False) -> dict[str, np.ndarray]:
     sr = sr or doc.sample_rate
     sfpath = sf2 or soundfont_path()
     notes = expand(doc)
@@ -162,6 +162,11 @@ def render_streams(doc: Document, sr: int | None = None,
         target = gm.target_for(name, stream_notes[0].inst)
         y = _synth_stream(stream_events(stream_notes, target), target, sfpath, sr, n)
         s = doc.stream(name)
+        if not no_fx:
+            from .fx import apply as apply_fx, parse_fx
+            f = parse_fx(s)
+            if f is not None:
+                y = apply_fx(y, sr, f)
         level = s.meta.get("level") if s is not None else None
         if level is not None:
             have = _rms_db(y, sr)
@@ -187,7 +192,8 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
             continue
         has_level = s is not None and "level" in s.meta
         gain = 1.0 if has_level else _GAIN.get(target.family, _GAIN["unknown"])
-        pan = _PAN.get(target.family, 0.0)
+        from .fx import parse_fx
+        pan = 0.0 if parse_fx(s) is not None else _PAN.get(target.family, 0.0)
         buf[:, 0] += y[:, 0] * gain * (1.0 - max(pan, 0.0))
         buf[:, 1] += y[:, 1] * gain * (1.0 + min(pan, 0.0))
     for start_s, end_s, g in section_gains(doc):
@@ -201,9 +207,10 @@ def mix(doc: Document, streams: dict[str, np.ndarray], sr: int,
 
 
 def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
-           with_vocals: bool = False, voice_ref: Path | None = None) -> np.ndarray:
+           with_vocals: bool = False, voice_ref: Path | None = None,
+           no_fx: bool = False) -> np.ndarray:
     sr = sr or doc.sample_rate
-    streams = render_streams(doc, sr, sf2)
+    streams = render_streams(doc, sr, sf2, no_fx=no_fx)
     if with_vocals:
         from . import sing
         from .sing_score import vocal_stream
@@ -244,10 +251,11 @@ def _load_stream(path: Path, sr: int, n: int, stream) -> np.ndarray:
 
 
 def render_to_file(doc: Document, path: str, sr: int | None = None,
-                   with_vocals: bool = False, voice_ref: Path | None = None) -> tuple[int, float]:
+                   with_vocals: bool = False, voice_ref: Path | None = None,
+                   no_fx: bool = False) -> tuple[int, float]:
     import soundfile as sf
 
     sr = sr or doc.sample_rate
-    audio = render(doc, sr, with_vocals=with_vocals, voice_ref=voice_ref)
+    audio = render(doc, sr, with_vocals=with_vocals, voice_ref=voice_ref, no_fx=no_fx)
     sf.write(path, audio, sr, subtype="PCM_16")
     return len(expand(doc)), audio.shape[0] / sr

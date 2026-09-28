@@ -83,6 +83,8 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("--sr", type=int, default=None)
     p_render.add_argument("--engine", choices=("sf2", "mock"), default="sf2",
                           help="sf2: sampled instruments (default); mock: crude synth")
+    p_render.add_argument("--no-fx", action="store_true",
+                          help="skip each part's production profile (fx lines), for A/B")
     p_render.add_argument("--voice-ref", default=None,
                           help="the original singer (wav); default out/stems/<source>/lead_vocals.wav")
     p_render.add_argument("--with-vocals", action="store_true",
@@ -129,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
                 def render_to_file(doc, out, sr):
                     return render_sf.render_to_file(
                         doc, out, sr, with_vocals=args.with_vocals,
-                        voice_ref=Path(args.voice_ref) if args.voice_ref else None)
+                        voice_ref=Path(args.voice_ref) if args.voice_ref else None,
+                        no_fx=args.no_fx)
                 suffix = ".render.wav"
             out = args.out or str(Path(args.file).with_suffix(suffix))
             try:

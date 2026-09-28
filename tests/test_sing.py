@@ -225,7 +225,7 @@ def test_render_with_vocals_mixes_the_sung_stream_level_matched(tmp_path, monkey
     monkeypatch.setattr(sing, "sing", lambda doc, ref=None, **k: (sung, []))
     doc = parse(SONG.replace("meta stem=lead_vocals", "meta stem=lead_vocals level=-30.0"))
     keys = np.zeros((44100 * 5, 2), np.float32)
-    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None: {"notes.lead": keys})
+    monkeypatch.setattr(render_sf, "render_streams", lambda d, sr=None, sf2=None, **k: {"notes.lead": keys})
     without = render_sf.render(doc, 44100)
     with_v = render_sf.render(doc, 44100, with_vocals=True)
     assert np.abs(without).max() == 0 and np.abs(with_v).max() > 0.1
