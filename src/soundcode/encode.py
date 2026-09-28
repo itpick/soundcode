@@ -14,6 +14,7 @@ stream-level estimate from a proxy check.
 from __future__ import annotations
 
 import math
+import os
 import re
 import shutil
 import sys
@@ -919,13 +920,33 @@ def stage_lyrics(stem: Path | None, sr: int, grid: dict,
 def encode(path: str, out_path: str | None = None,
            workdir: str | None = None, title: str | None = None,
            artist: str | None = None, offset: float | None = None) -> str:
-    """Analyse `path` and write a .sc file. Returns the .sc text."""
+    """Analyse `path` and write a .sc file. Returns the .sc text.
+
+    Without `workdir`, the working directory (stems, tsumugi output -- a
+    full stem set, GBs for a full song) is a fresh `tempfile.mkdtemp`. Since
+    nothing else ever points into it once `encode` returns, it is removed
+    again before this function returns, unless `SOUNDCODE_KEEP_WORK=1` is
+    set (for debugging a failed run). A caller-supplied `workdir` is always
+    left alone -- the caller owns it and may want the intermediates kept or
+    reused (`score.bench.prepare` passes one under `out/bench/<name>/work`
+    so repeated `bench`/`calibrate` runs reuse stems instead of filling the
+    disk with an unbounded number of abandoned `sc-*` temp dirs)."""
     src = Path(path)
-    wd = Path(workdir or tempfile.mkdtemp(prefix="sc-")) / (src.stem + ".scw")
+    made_tmp_root = workdir is None
+    tmp_root = Path(workdir) if workdir is not None else Path(tempfile.mkdtemp(prefix="sc-"))
+    wd = tmp_root / (src.stem + ".scw")
     wd.mkdir(parents=True, exist_ok=True)
     STEM_FAILURE.clear()
     STEM_NOTES.clear()
+    try:
+        return _encode(src, wd, out_path, title, artist, offset)
+    finally:
+        if made_tmp_root and not os.environ.get("SOUNDCODE_KEEP_WORK"):
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
+
+def _encode(src: Path, wd: Path, out_path: str | None, title: str | None,
+            artist: str | None, offset: float | None) -> str:
     _log(f"loading {src.name}")
     y, sr = load_audio(str(src))
     duration = y.shape[1] / sr

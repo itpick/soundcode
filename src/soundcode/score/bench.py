@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -137,7 +139,11 @@ def _run_separate(name: str, original: Path, stems_dir: Path, root: Path, force:
 
 def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) -> dict:
     """Cut (if needed) -> separate -> encode -> render one benchmark entry,
-    each stage cached by the mtime of its input unless `force`. Returns
+    each stage cached by the mtime of its input unless `force`. `encode` is
+    always given `--workdir out/bench/<name>/work`, so its intermediates
+    (a full stem set -- GBs for a full song) land under `out/bench` --
+    reused run to run instead of each `encode` call leaving behind its own
+    abandoned `sc-*` temp dir under the system temp directory. Returns
     `{name, original, stems_dir, sc, parts_dir, rebuild, timing}`, where
     `timing` is `{stage: seconds}` for every stage (0.0 when cached)."""
     root = Path(root)
@@ -159,6 +165,7 @@ def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) ->
 
     def _encode():
         cmd = [sys.executable, "-m", "soundcode.cli", "encode", str(original), "-o", str(sc),
+               "--workdir", str(bench_dir / "work"),
                "--title", entry["title"], "--artist", entry["artist"]]
         if entry.get("start") is not None:
             cmd += ["--offset", str(entry["start"])]
@@ -373,25 +380,60 @@ def run_bench(tier: str, label: str, root: Path, force: bool = False, run=subpro
 # calibrate: re-measure anchors.json from tier A (Task 7)
 # --------------------------------------------------------------------------
 
-_MIN_ANCHOR_SPREAD = 1e-6   # |ceiling - floor| below this: too degenerate to use
+_MIN_ANCHOR_SPREAD_FRAC = 0.10   # |ceiling - floor| below this fraction of the
+                                 # existing anchor's spread: too degenerate to use
+
+# (part_type, metric) pairs `calibrate` never measures, by design -- kept
+# on their existing (manually-set) anchor with no "not enough data" warning:
+# `separate` never writes a `mix.wav` stem (calibration only ever compares
+# bare stems, so the whole `mix` part type has no ceiling/floor pairs), and
+# `part_metrics` is always called with `doc=None` from here (there's no
+# single song's lyrics to align two *different* songs' vocals against, and
+# a ceiling pair's "two" sides are the same song anyway), so the
+# lyrics-aligned vocal metrics never get a value either.
+_MANUAL_METRICS = {("vocal", "sung_wer"), ("vocal", "sung_wer_original"), ("vocal", "sung_wer_excess")}
+
+
+def _calibrated(part_type: str, metric: str) -> bool:
+    if part_type == "mix":
+        return False
+    return (part_type, metric) not in _MANUAL_METRICS
 
 
 def _median(vals: list[float]) -> float | None:
-    vals = [v for v in vals if v is not None]
+    vals = [v for v in vals if v is not None and math.isfinite(v)]
     return float(np.median(vals)) if vals else None
 
 
-def _collect_metric_samples(pairs: list[tuple[Path, Path]], cache_dir: Path) -> dict[str, dict[str, list[float]]]:
+def _collect_metric_samples(pairs: list[tuple[Path, Path]], cache_dir: Path,
+                            both_active: bool) -> dict[str, dict[str, list[float]]]:
     """`{part_type: {metric: [values]}}` over every `(ref_dir, est_dir)`
     pair, one `scorer.part_metrics` call per part present (as `<key>.wav`)
-    in both directories. A pair/part that errors (e.g. too short/silent to
-    feature) is skipped with a warning printed, rather than failing the
-    whole calibration run."""
+    in both directories -- but only when the reference stem is active over
+    the whole clip (`scorer.is_active`, the same gate `score_song` itself
+    uses), and, when `both_active` (a floor pair, two different songs),
+    only when the estimate stem is active too. `separate` always writes
+    every stem file, silent or not (e.g. a piano ballad's `drums.wav` is
+    pure bleed) -- without this gate, bleed-vs-bleed values would pool into
+    the same medians as genuine signal and badly skew them.
+
+    A pair/part that errors (e.g. too short to feature, or an unreadable
+    file) is skipped with a warning printed, rather than failing the whole
+    calibration run."""
     out: dict[str, dict[str, list[float]]] = {}
     for ref_dir, est_dir in pairs:
         for key, part_type in scorer.PART_TYPE.items():
             ref_path, est_path = ref_dir / f"{key}.wav", est_dir / f"{key}.wav"
             if not (ref_path.is_file() and est_path.is_file()):
+                continue
+            try:
+                if not scorer.is_active(ref_path):
+                    continue
+                if both_active and not scorer.is_active(est_path):
+                    continue
+            except Exception as exc:                       # noqa: BLE001 -- one bad file shouldn't sink calibration
+                print(f"calibrate: {ref_path} vs {est_path} ({key}): activity check failed: {exc}",
+                     file=sys.stderr)
                 continue
             drum_cache = cache_dir if key == "drums" else None
             try:
@@ -418,17 +460,20 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
                    floor: float | None, warnings: list[str]) -> dict:
     """`old` (the current anchor entry) with `ceiling`/`floor` replaced by
     the newly measured ones -- unless there isn't enough data, the new
-    spread is too small to be useful, or the newly measured direction
-    (better = higher vs. better = lower) flips against `old`'s. Each of
-    those leaves `old` untouched and appends a warning; weight and axis are
-    always kept as they are."""
+    spread is too small relative to `old`'s to be useful, or the newly
+    measured direction (better = higher vs. better = lower) flips against
+    `old`'s. Each of those leaves `old` untouched and appends a warning;
+    weight and axis are always kept as they are."""
     label = f"{part_type}.{metric}"
     if ceiling is None or floor is None:
         warnings.append(f"{label}: not enough data to measure (ceiling={ceiling}, floor={floor}) "
                         f"-- keeping floor={old['floor']}, ceiling={old['ceiling']}")
         return dict(old)
-    if abs(ceiling - floor) < _MIN_ANCHOR_SPREAD:
-        warnings.append(f"{label}: degenerate, ceiling≈floor≈{ceiling:.4g} "
+    old_spread = abs(old["ceiling"] - old["floor"])
+    new_spread = abs(ceiling - floor)
+    if new_spread < _MIN_ANCHOR_SPREAD_FRAC * old_spread:
+        warnings.append(f"{label}: degenerate, ceiling≈floor≈{ceiling:.4g} (spread {new_spread:.4g} "
+                        f"< {_MIN_ANCHOR_SPREAD_FRAC:.0%} of the existing {old_spread:.4g}) "
                         f"-- keeping floor={old['floor']}, ceiling={old['ceiling']}")
         return dict(old)
     old_dir, new_dir = _direction(old["ceiling"], old["floor"]), _direction(ceiling, floor)
@@ -437,6 +482,33 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
                         f"measured {floor:g} -> {ceiling:g}) -- keeping the existing anchor")
         return dict(old)
     return {**old, "floor": floor, "ceiling": ceiling}
+
+
+_ANCHOR_KEYS = ("floor", "ceiling", "weight", "axis")
+
+
+def _dump_anchors(data: dict) -> str:
+    """`anchors.json`'s on-disk text: part types and metrics sorted (a
+    stable diff run to run), one compact line per metric, keys in
+    `_ANCHOR_KEYS` order. `json.dumps` on an int leaves it an int and on a
+    float leaves it a float, so an untouched anchor's `floor`/`ceiling`
+    keep whatever type they were parsed as."""
+    lines = ["{"]
+    part_types = sorted(data)
+    for pi, part_type in enumerate(part_types):
+        lines.append(f'  "{part_type}": {{')
+        metrics = sorted(data[part_type])
+        for mi, metric in enumerate(metrics):
+            entry = data[part_type][metric]
+            ordered = {k: entry[k] for k in _ANCHOR_KEYS if k in entry}
+            ordered.update({k: v for k, v in entry.items() if k not in ordered})
+            body = json.dumps(ordered, separators=(", ", ": "))
+            comma = "," if mi < len(metrics) - 1 else ""
+            lines.append(f'    "{metric}": {body}{comma}')
+        comma = "," if pi < len(part_types) - 1 else ""
+        lines.append("  }" + comma)
+    lines.append("}")
+    return "\n".join(lines) + "\n"
 
 
 def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) -> dict:
@@ -455,16 +527,33 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
     `score_song` itself uses -- so calibration measures exactly what
     scoring measures. Weights and axes are untouched.
 
-    An anchor is left as it is, with a warning, when there isn't enough
-    data to measure it, when the newly measured `|ceiling - floor|` is too
-    small to be useful, or when its direction (better = higher vs. better
-    = lower) flips against the anchor's existing direction. `anchors.json`
-    (or `anchors_path`, for tests) is rewritten atomically.
+    A ceiling sample is only taken when the reference stem is active over
+    the whole clip (`scorer.is_active`, the same gate `score_song` uses); a
+    floor pair only when *both* stems are -- `separate` always writes every
+    stem file, so e.g. a piano ballad's `drums.wav` is pure bleed, and
+    without this gate bleed-vs-bleed values would pool into, and badly skew,
+    the same medians as genuine signal.
 
-    Returns `{anchors, warnings, ceilings, floors}`: the new anchors dict
-    as written, the list of warnings, and the raw per-(part_type, metric)
-    measured medians (before the degenerate/flip guard) for the caller to
-    log or fold into a commit message.
+    An anchor is left as it is, with a warning, when there isn't enough
+    data to measure it, or when its direction (better = higher vs. better =
+    lower) flips against the anchor's existing direction. It's also left as
+    it is, with a warning, when the newly measured `|ceiling - floor|` is
+    less than 10% of the *existing* anchor's `|ceiling - floor|` -- too
+    small, relative to that anchor's own scale, to be a useful update.
+    `("mix", *)` and the lyrics-aligned vocal metrics (`sung_wer*`) are
+    never measured at all (`_MANUAL_METRICS`) -- calibration has no
+    `mix.wav` stem and no single song's lyrics to align two different
+    songs' vocals against -- and are left as they are with no warning,
+    reported separately as `manual`. `anchors.json` (or `anchors_path`, for
+    tests) is rewritten atomically, part types and metrics sorted, one
+    compact line per metric.
+
+    Returns `{anchors, warnings, manual, ceilings, floors}`: the new
+    anchors dict as written, the list of warnings, `{part_type: [metric]}`
+    for the anchors calibration never measures by design, and the raw
+    per-(part_type, metric) measured medians (before the degenerate/flip
+    guard, and absent for `manual` entries) for the caller to log or fold
+    into a commit message.
     """
     root = Path(root)
     entries = TIERS["A"]
@@ -485,6 +574,8 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
     for entry in entries:
         name = entry["name"]
         calib_dir = root / "out" / "bench" / "calib" / name
+        if calib_dir.exists():        # never cached -- a stale stem from a
+            shutil.rmtree(calib_dir)  # previous calibrate must not linger
         cmd = [sys.executable, "-m", "soundcode.cli", "separate", str(originals[name]), "-o", str(calib_dir)]
         _check(run(cmd, capture_output=True, text=True, cwd=root), name, "calibrate-separate")
         calib_dirs[name] = calib_dir
@@ -493,17 +584,22 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
     floor_pairs = [(stems_dirs[a["name"]], stems_dirs[b["name"]])
                    for a in entries for b in entries if a["name"] != b["name"]]
 
-    ceilings = _collect_metric_samples(ceiling_pairs, cache_dir)
-    floors = _collect_metric_samples(floor_pairs, cache_dir)
+    ceilings = _collect_metric_samples(ceiling_pairs, cache_dir, both_active=False)
+    floors = _collect_metric_samples(floor_pairs, cache_dir, both_active=True)
 
     current = json.loads(anchors_path.read_text())
     new_anchors: dict[str, dict] = {}
     warnings: list[str] = []
     measured_ceilings: dict[str, dict] = {}
     measured_floors: dict[str, dict] = {}
+    manual: dict[str, list[str]] = {}
     for part_type, part_anchors in current.items():
         new_anchors[part_type] = {}
         for metric, entry in part_anchors.items():
+            if not _calibrated(part_type, metric):
+                new_anchors[part_type][metric] = dict(entry)
+                manual.setdefault(part_type, []).append(metric)
+                continue
             c = _median(ceilings.get(part_type, {}).get(metric, []))
             f = _median(floors.get(part_type, {}).get(metric, []))
             measured_ceilings.setdefault(part_type, {})[metric] = c
@@ -511,8 +607,8 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
             new_anchors[part_type][metric] = _update_anchor(part_type, metric, entry, c, f, warnings)
 
     tmp = anchors_path.with_name(anchors_path.name + ".part")
-    tmp.write_text(json.dumps(new_anchors, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(_dump_anchors(new_anchors), encoding="utf-8")
     tmp.replace(anchors_path)
 
-    return {"anchors": new_anchors, "warnings": warnings,
+    return {"anchors": new_anchors, "warnings": warnings, "manual": manual,
             "ceilings": measured_ceilings, "floors": measured_floors}

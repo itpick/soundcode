@@ -297,11 +297,14 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.calibrate:
                 res = bench.calibrate(Path("."))
-                for part_type in sorted(res["anchors"]):
-                    for metric in sorted(res["anchors"][part_type]):
-                        c = res["ceilings"].get(part_type, {}).get(metric)
+                for part_type in sorted(res["ceilings"]):
+                    for metric in sorted(res["ceilings"][part_type]):
+                        c = res["ceilings"][part_type].get(metric)
                         f = res["floors"].get(part_type, {}).get(metric)
                         print(f"calibrate: {part_type}.{metric}: floor={f} ceiling={c}")
+                for part_type in sorted(res.get("manual", {})):
+                    for metric in sorted(res["manual"][part_type]):
+                        print(f"calibrate: {part_type}.{metric}: manual (not calibrated)")
                 for w in res["warnings"]:
                     print(f"calibrate: {w}")
                 print(f"calibrate: wrote {bench.anchors.ANCHORS_PATH}")

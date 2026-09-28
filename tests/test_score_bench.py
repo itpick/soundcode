@@ -147,6 +147,21 @@ def test_prepare_runs_every_stage_and_returns_its_paths_and_timing(tmp_path):
     assert any("render" in c for c in calls)
 
 
+def test_prepare_passes_a_workdir_under_out_bench_to_encode(tmp_path):
+    """Without this, `encode` makes its own `tempfile.mkdtemp` per call and
+    never removes it when the caller gave no `--workdir` -- an unbounded
+    leak across repeated bench/calibrate runs. `bench` must always pass
+    one, under `out/bench/<name>` (so intermediates are cached there, on
+    whatever drive `out/bench` lives on, and reused run to run)."""
+    _mk_source(tmp_path, ENTRY_A)
+    run, calls = _fake_run()
+    bench.prepare(ENTRY_A, tmp_path, run=run)
+    encode_call = next(c for c in calls if len(c) > 3 and c[3] == "encode")
+    assert "--workdir" in encode_call
+    workdir = encode_call[encode_call.index("--workdir") + 1]
+    assert Path(workdir) == tmp_path / "out" / "bench" / "song-a" / "work"
+
+
 def test_prepare_uses_the_source_directly_when_the_name_already_matches(tmp_path):
     """No stem mismatch and no start/end: no ffmpeg cut is needed."""
     _mk_source(tmp_path, ENTRY_A)
@@ -402,6 +417,7 @@ def test_calibrate_ceiling_and_floor_are_medians_over_tier_a(tmp_path, monkeypat
     _mk_calib_sources(tmp_path)
     monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
     monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
     run, calls = _fake_run()
 
     # ceiling values keyed by ref song (each song vs its own 2nd separation):
@@ -446,6 +462,7 @@ def test_calibrate_leaves_degenerate_or_flipped_anchors_and_warns(tmp_path, monk
     _mk_calib_sources(tmp_path)
     monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
     monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
     run, _ = _fake_run()
 
     def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
@@ -477,6 +494,157 @@ def test_calibrate_leaves_degenerate_or_flipped_anchors_and_warns(tmp_path, monk
     assert res["ceilings"]["pitched"]["mert"] is None and res["floors"]["pitched"]["mert"] is None
 
 
+def test_calibrate_excludes_silent_stems_from_both_ceiling_and_floor(tmp_path, monkeypatch):
+    """`separate` always writes every stem file, so song-b's piano is
+    silent (pure bleed) in this scenario -- both its own ceiling sample
+    (vs. its 2nd separation) and every floor pair it appears in (as either
+    side) must be excluded from the medians, per `scorer.is_active`."""
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: "song-b" not in Path(path).parts)
+    run, _ = _fake_run()
+
+    # song-b's ceiling value (0.9) and every pair it's in (0.05) are
+    # deliberately extreme outliers -- if the silent-stem gate leaks, the
+    # medians below would be pulled toward them, not just toward song-a/c's.
+    ceiling_by_song = {"song-a": 0.1, "song-b": 0.9, "song-c": 0.2}
+    floor_by_pair = {("song-a", "song-c"): 0.3, ("song-c", "song-a"): 0.7,
+                     ("song-a", "song-b"): 0.05, ("song-b", "song-a"): 0.05,
+                     ("song-b", "song-c"): 0.05, ("song-c", "song-b"): 0.05}
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        ref_path, est_path = Path(ref_path), Path(est_path)
+        ref_song = ref_path.parent.name
+        if "calib" in est_path.parts:
+            return {"note_f1": ceiling_by_song[ref_song]}
+        return {"note_f1": floor_by_pair[(ref_song, est_path.parent.name)]}
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {
+        "pitched": {"note_f1": {"floor": 0.0, "ceiling": 0.5, "weight": 1, "axis": "what"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    # ceiling: median({0.1, 0.2}) -- song-b's 0.9 excluded
+    assert res["ceilings"]["pitched"]["note_f1"] == pytest.approx(0.15)
+    # floor: median({0.3, 0.7}) -- every pair touching song-b excluded
+    assert res["floors"]["pitched"]["note_f1"] == pytest.approx(0.5)
+
+
+def test_calibrate_degenerate_guard_is_relative_to_old_spread(tmp_path, monkeypatch):
+    """A measured spread of 0.0015 is far above the old flat 1e-6 epsilon,
+    but still < 10% of a small existing anchor's own 0.02 spread -- must be
+    caught as degenerate. The same-sized spread against a wide existing
+    anchor would also be degenerate, so `wide_range` uses a measured spread
+    (0.5) that's comfortably above 10% of its anchor's spread (1.0), to
+    prove a large-enough spread still updates normally."""
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
+    run, _ = _fake_run()
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        is_ceiling = "calib" in Path(est_path).parts
+        return {"small_range": 0.0115 if is_ceiling else 0.01,    # spread 0.0015
+                "wide_range": 0.75 if is_ceiling else 0.25}       # spread 0.5
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {"pitched": {
+        "small_range": {"floor": 0.0, "ceiling": 0.02, "weight": 1, "axis": "what"},
+        "wide_range": {"floor": 0.0, "ceiling": 1.0, "weight": 1, "axis": "what"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    new = json.loads(anchors_path.read_text())
+    assert new["pitched"]["small_range"] == {"floor": 0.0, "ceiling": 0.02, "weight": 1, "axis": "what"}
+    assert any("pitched.small_range" in w and "degenerate" in w for w in res["warnings"])
+    assert new["pitched"]["wide_range"]["floor"] == pytest.approx(0.25)
+    assert new["pitched"]["wide_range"]["ceiling"] == pytest.approx(0.75)
+
+
+def test_calibrate_leaves_mix_and_sung_wer_manual_with_no_warning(tmp_path, monkeypatch):
+    """`mix` (no `mix.wav` stem is ever separated) and the lyrics-aligned
+    vocal metrics (calibration always calls `part_metrics` with `doc=None`)
+    are never measured -- left untouched, reported in `manual`, and never
+    warned about as "not enough data"."""
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"lead_vocals": "vocal"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
+    run, _ = _fake_run()
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        assert doc is None
+        is_ceiling = "calib" in Path(est_path).parts
+        return {"word_mae_s": 0.05 if is_ceiling else 0.4}
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {
+        "vocal": {"word_mae_s": {"floor": 0.5, "ceiling": 0.05, "weight": 1, "axis": "what"},
+                  "sung_wer_excess": {"floor": 0.6, "ceiling": 0.0, "weight": 1, "axis": "what"}},
+        "mix": {"chroma": {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    new = json.loads(anchors_path.read_text())
+    # measured normally
+    assert new["vocal"]["word_mae_s"]["floor"] == pytest.approx(0.4)
+    assert new["vocal"]["word_mae_s"]["ceiling"] == pytest.approx(0.05)
+    # left untouched, no warning
+    assert new["vocal"]["sung_wer_excess"] == {"floor": 0.6, "ceiling": 0.0, "weight": 1, "axis": "what"}
+    assert new["mix"]["chroma"] == {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"}
+
+    assert res["manual"] == {"vocal": ["sung_wer_excess"], "mix": ["chroma"]}
+    assert not any("sung_wer_excess" in w for w in res["warnings"])
+    assert not any("mix.chroma" in w for w in res["warnings"])
+    # "print only the measured part types": mix never appears in ceilings/floors
+    assert "mix" not in res["ceilings"] and "mix" not in res["floors"]
+    assert "sung_wer_excess" not in res["ceilings"].get("vocal", {})
+
+
+def test_calibrate_writes_anchors_sorted_and_compact(tmp_path, monkeypatch):
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
+    run, _ = _fake_run()
+    monkeypatch.setattr(bench.scorer, "part_metrics",
+                        lambda *a, **k: {"onset_f1": 0.8, "chroma": 0.9})
+
+    anchors_path = tmp_path / "anchors.json"
+    # deliberately out of alphabetical order, both part types and metrics
+    _write_anchors(anchors_path, {
+        "zeta": {"onset_f1": {"floor": 0.0, "ceiling": 0.9, "weight": 1, "axis": "what"}},
+        "alpha": {"z_metric": {"floor": 0.0, "ceiling": 1.0, "weight": 1, "axis": "what"},
+                  "chroma": {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"}}})
+
+    bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    text = anchors_path.read_text()
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+
+    def _index_containing(needle: str) -> int:
+        return next(i for i, ln in enumerate(lines) if needle in ln)
+
+    # part types in sorted order
+    assert _index_containing('"alpha":') < _index_containing('"zeta":')
+    # metrics within a part type in sorted order, one compact line each
+    chroma_lines = [ln for ln in lines if '"chroma"' in ln]
+    assert len(chroma_lines) == 1
+    assert '"floor"' in chroma_lines[0] and '"axis"' in chroma_lines[0]
+    assert _index_containing('"chroma":') < _index_containing('"z_metric":')
+    # still valid, round-tripping JSON with the same values
+    assert json.loads(text)["alpha"]["chroma"]["ceiling"] == pytest.approx(0.98)
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -501,6 +669,27 @@ def test_cli_bench_calibrate_calls_calibrate_and_prints_a_summary(tmp_path, monk
     assert "pitched.note_f1: floor=0.1 ceiling=0.9" in out
     assert "degenerate" in out
     assert str(bench.anchors.ANCHORS_PATH) in out
+
+
+def test_cli_bench_calibrate_labels_manual_entries_and_skips_unmeasured_part_types(
+        tmp_path, monkeypatch, capsys):
+    from soundcode import cli
+
+    def fake_calibrate(root, run=subprocess.run, anchors_path=None):
+        return {"anchors": {}, "warnings": [],
+                "manual": {"mix": ["chroma", "onset_f1"], "vocal": ["sung_wer_excess"]},
+                "ceilings": {"vocal": {"word_mae_s": 0.05}}, "floors": {"vocal": {"word_mae_s": 0.4}}}
+
+    monkeypatch.setattr(bench, "calibrate", fake_calibrate)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["bench", "--calibrate"]) == 0
+    out = capsys.readouterr().out
+    assert "vocal.word_mae_s: floor=0.4 ceiling=0.05" in out
+    assert "mix.chroma: manual (not calibrated)" in out
+    assert "mix.onset_f1: manual (not calibrated)" in out
+    assert "vocal.sung_wer_excess: manual (not calibrated)" in out
+    # "print only the measured part types": no bare "mix" floor/ceiling line
+    assert "mix: floor" not in out and "mix.chroma: floor" not in out
 
 
 def test_cli_bench_dispatches_to_run_bench(tmp_path, monkeypatch):

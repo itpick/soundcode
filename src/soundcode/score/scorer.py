@@ -234,6 +234,22 @@ def _load_stereo(path: Path, sr: int):
     return y.astype(np.float32)
 
 
+def is_active(path: Path, gate_db: float = -50.0) -> bool:
+    """True if `path`'s loudest 100 ms window is >= `gate_db` dBFS anywhere
+    in the file -- the same test `score_song` applies (via `slices.active`
+    over the whole clip) to tell a genuinely silent part from one that's
+    merely quiet. Used by `bench.calibrate` to exclude a stem that has no
+    real signal for a given song (e.g. no drums in a piano ballad, where
+    `separate` still writes a `drums.wav` of pure bleed) from its
+    ceiling/floor samples, before bleed-vs-bleed values pollute the
+    medians."""
+    from . import metrics, slices
+
+    y = _load_mono(Path(path))
+    duration = y.shape[-1] / metrics.SR
+    return slices.active(y, metrics.SR, 0.0, duration, gate_db=gate_db)
+
+
 def _fit(y, n: int):
     """Unequal lengths: the original sets the length. A shorter side is
     zero-padded (a rebuild that stops early is silent there, and scored as
