@@ -1,0 +1,58 @@
+{
+  "pitched": {
+    "note_f1":         {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
+    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
+    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
+    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
+    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
+    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
+    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+  },
+  "bass": {
+    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
+    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "f0_cents":        {"floor": 300, "ceiling": 10,   "weight": 1,   "axis": "what"},
+    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
+    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
+    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
+    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
+    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
+    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+  },
+  "drums": {
+    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "drum_voice_f1":   {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
+    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
+    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
+    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
+    "decay_ratio_err": {"floor": 1.0, "ceiling": 0.05, "weight": 1,   "axis": "sound"},
+    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
+    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+  },
+  "vocal": {
+    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
+    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "f0_cents":        {"floor": 300, "ceiling": 10,   "weight": 1,   "axis": "what"},
+    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
+    "sung_wer_excess": {"floor": 0.6, "ceiling": 0.0,  "weight": 1,   "axis": "what"},
+    "word_mae_s":      {"floor": 0.5, "ceiling": 0.05, "weight": 1,   "axis": "what"},
+    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
+    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
+    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
+    "voice_sim":       {"floor": 0.6, "ceiling": 0.95, "weight": 1,   "axis": "sound"},
+    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
+    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+  },
+  "mix": {
+    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
+    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
+    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
+    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
+    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
+    "width_diff":      {"floor": 0.5, "ceiling": 0.02, "weight": 1,   "axis": "sound"},
+    "lufs_diff_abs":   {"floor": 10,  "ceiling": 0.5,  "weight": 1,   "axis": "dyn"}
+  }
+}
