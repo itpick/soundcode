@@ -187,7 +187,8 @@ def _drums_from_kit(doc, s, stream_notes, target, sfpath, sr: int, n: int):
     if not kit_dir.is_absolute() and getattr(doc, "path", None):
         kit_dir = Path(doc.path).parent / kit_dir
     if not kit_dir.is_dir():
-        s.warns.append(f"drum kit {kit_dir} not found; General MIDI kit used")
+        import sys
+        print(f"render: drum kit {kit_dir} not found; General MIDI kit used", file=sys.stderr)
         return None
     from . import kit as kitmod
 
@@ -249,7 +250,7 @@ def render(doc: Document, sr: int | None = None, sf2: Path | None = None,
         for w in warns:
             print(f"with-vocals: {w}", file=sys.stderr)
         streams[name] = _load_stream(wav, sr, max((y.shape[0] for y in streams.values()), default=0),
-                                     doc.stream(name))
+                                     doc.stream(name), no_fx=no_fx)
     return mix(doc, streams, sr, with_vocals)
 
 
@@ -268,17 +269,24 @@ def match_level(y: np.ndarray, sr: int, level_db: float) -> np.ndarray:
     return (y * 10 ** ((level_db - have) / 20)).astype(np.float32)
 
 
-def _load_stream(path: Path, sr: int, n: int, stream) -> np.ndarray:
+def _load_stream(path: Path, sr: int, n: int, stream, no_fx: bool = False) -> np.ndarray:
     import librosa
 
     y, _ = librosa.load(str(path), sr=sr, mono=True)
     n = max(n, len(y))
     out = np.zeros((n, 2), np.float32)
     out[: len(y), 0] = out[: len(y), 1] = y
+    from .fx import apply as apply_fx, parse_fx
+    f = parse_fx(stream) if stream is not None and not no_fx else None
+    if f is not None and np.abs(out).max() > 0:
+        out = apply_fx(out, sr, f)                 # the sung vocal gets the lead stem's production
     level = stream.meta.get("level") if stream is not None else None
     if level is not None and np.abs(out).max() > 0:
-        mono = match_level(out[:, 0], sr, float(level.rstrip("dB")))
-        out[:, 0] = out[:, 1] = mono
+        gain = match_level(out.mean(1), sr, float(level.rstrip("dB")))
+        ref = out.mean(1)
+        k = float(np.sqrt(np.mean(gain.astype(np.float64) ** 2)) /
+                  (np.sqrt(np.mean(ref.astype(np.float64) ** 2)) + 1e-20))
+        out = out * k
     return out
 
 
