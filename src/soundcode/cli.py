@@ -182,12 +182,13 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             f = cmp._fmt
             print(f"{'stem':<15}{'orig dB':>8}{'rend dB':>8}{'Δ dB':>7}{'noteF1':>8}"
-                  f"{'anyOct':>8}{'chroma':>8}{'onsetF1':>8}{'energy':>8}")
+                  f"{'anyOct':>8}{'chroma':>8}{'onsetF1':>8}{'energy':>8}{'specdB':>8}")
             for s, r in rep["stems"].items():
                 print(f"{s:<15}{f(r['level_orig_db'], '.1f'):>8}{f(r['level_render_db'], '.1f'):>8}"
                       f"{f(r['level_diff_db'], '+.1f'):>7}{f(r['notes_f1']):>8}"
                       f"{f(r['notes_f1_octave']):>8}{f(r['chroma']):>8}"
-                      f"{f(r['onset_f1']):>8}{f(r['energy_corr']):>8}")
+                      f"{f(r['onset_f1']):>8}{f(r['energy_corr']):>8}"
+                      f"{f(r.get('spectral_db'), '.1f'):>8}")
             lv = rep["stems"].get("lead_vocals", {})
             if "pitch_cents" in lv:
                 print(f"lead_vocals sung: pitch error {f(lv['pitch_cents'], '.0f')} c, "

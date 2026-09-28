@@ -180,3 +180,15 @@ def test_pitch_error_of_silence_is_none():
 
 def test_voice_similarity_is_none_on_silence():
     assert cmp.voice_similarity(_sweep(220.0), np.zeros(32000, np.float32), 16000) is None
+
+
+# --- spectral match ----------------------------------------------------------------------------
+
+def test_spectral_db_is_zero_for_the_same_sound_and_grows_with_a_tilt():
+    rng = np.random.default_rng(0)
+    a = (rng.standard_normal(SR * 3) * 0.1).astype(np.float32)
+    assert cmp.spectral_db(a, a, SR) < 0.5
+    Y = np.fft.rfft(a); f = np.fft.rfftfreq(len(a), 1 / SR)
+    dark = np.fft.irfft(Y * 10 ** (-6 * np.log2(np.maximum(f, 20) / 1000) / 20), len(a)).astype(np.float32)
+    assert cmp.spectral_db(a, dark, SR) > 6
+    assert cmp.spectral_db(a, np.zeros_like(a), SR) is None

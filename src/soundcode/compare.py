@@ -152,6 +152,18 @@ def sung_stream(doc, wav, n: int) -> np.ndarray:
     return out
 
 
+def spectral_db(y_ref, y_est, sr) -> float | None:
+    """Mean |dB| between the two long-term 1/3-octave spectra (each relative to
+    its own mean), over bands the original really uses: does it *sound* alike."""
+    from .fx import band_db
+
+    if _silent(y_ref) or _silent(y_est):
+        return None
+    a, b = band_db(y_ref, sr), band_db(y_est, sr)
+    live = a > -50
+    return float(np.mean(np.abs(a[live] - b[live]))) if live.any() else None
+
+
 def blocks_from_grid(doc, duration: float) -> list[tuple[float, float]]:
     from .expand import build_grid
 
@@ -289,6 +301,7 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             row["notes_f1"] = note_f1(io, ho, ir, hr)
             row["notes_f1_octave"] = note_f1(io, ho, ir, hr, octave_agnostic=True)
         row["sound"] = None                      # CLAP: enabled in Plan 2
+        row["spectral_db"] = spectral_db(yo, yr, SR)
         if with_vocals and s == "lead_vocals":
             row["pitch_cents"] = pitch_error_cents(yo, yr, SR)
             row["voice_sim"] = voice_similarity(yo, yr, SR)
@@ -348,7 +361,7 @@ def _html(out: Path, report: dict) -> None:
             f"<tr><td>{s}</td><td>{_fmt(r['level_orig_db'], '.1f')}</td>"
             f"<td>{_fmt(r['level_render_db'], '.1f')}</td><td>{_fmt(r['level_diff_db'], '+.1f')}</td>"
             f"<td>{_fmt(r['notes_f1'])}</td><td>{_fmt(r['notes_f1_octave'])}</td>"
-            f"<td>{_fmt(r['chroma'])}</td><td>{_fmt(r['onset_f1'])}</td><td>{_fmt(r['energy_corr'])}</td>"
+            f"<td>{_fmt(r['chroma'])}</td><td>{_fmt(r['onset_f1'])}</td><td>{_fmt(r['energy_corr'])}</td><td>{_fmt(r.get('spectral_db'), '.1f')}</td>"
             f"<td><audio controls preload=none src='stem-{s}.orig.wav'></audio></td>"
             f"<td><audio controls preload=none src='stem-{s}.render.wav'></audio></td></tr>")
     imgs = "".join(f"<h3>{s}</h3><img src='{s}.png' style='max-width:100%'>" for s in report["stems"])
@@ -359,6 +372,6 @@ def _html(out: Path, report: dict) -> None:
 table{{border-collapse:collapse;overflow-x:auto;display:block}}</style>
 <h1>{Path(report['original']).name} vs {Path(report['render']).name}</h1>{notes}
 <table><tr><th>stem</th><th>orig dB</th><th>render dB</th><th>Δ dB</th><th>note F1</th>
-<th>F1 any-oct</th><th>chroma</th><th>onset F1</th><th>energy r</th><th>original</th><th>render</th></tr>
+<th>F1 any-oct</th><th>chroma</th><th>onset F1</th><th>energy r</th><th>spec dB</th><th>original</th><th>render</th></tr>
 {''.join(rows)}</table><h2>Where it diverges</h2><img src='bars.png' style='max-width:100%'>{imgs}
 """, encoding="utf-8")
