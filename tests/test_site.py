@@ -144,3 +144,47 @@ def test_a_failed_song_names_itself_and_keeps_the_old_data(tmp_path, monkeypatch
     with pytest.raises(RuntimeError, match="discipline-30s"):
         site.build(root, root / "site", root / "work", run=run, songs=[song])
     assert (root / "site" / "data.json").read_text() == '{"old": true}'
+
+
+def test_partial_failure_preserves_existing_media_and_data(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    root = tmp_path
+    (root / "audio" / "test").mkdir(parents=True)
+    song1 = {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"}
+    song2 = {"slug": "lights-30s", "title": "Lights", "clip": "audio/test/lights-30s.mp3"}
+    (root / song1["clip"]).write_bytes(b"x" * 480_000)
+    (root / song2["clip"]).write_bytes(b"y" * 480_000)
+
+    # Create existing site with song1's media
+    (root / "site" / "media").mkdir(parents=True)
+    original_media = b"ORIGINAL_SONG1"
+    (root / "site" / "media" / "discipline-30s-original.mp3").write_bytes(original_media)
+    old_data = {"old": "data", "songs": [{"slug": "discipline-30s"}]}
+    (root / "site" / "data.json").write_text(json.dumps(old_data))
+
+    monkeypatch.setattr(site, "_frames", lambda p: 44100 * 30)
+
+    def run(cmd, **k):
+        out = Path(cmd[cmd.index("-o") + 1]) if "-o" in cmd else Path(cmd[-1])
+        if "encode" in cmd:
+            out.write_text(SC)
+        elif "render" in cmd:
+            if "lights" in str(out):  # Song 2's render fails
+                return subprocess.CompletedProcess(cmd, 1, "", "render failed")
+            out.write_bytes(b"RIFF")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        else:  # ffmpeg
+            if "lights" not in str(out):  # Only song1's ffmpeg succeeds
+                out.write_bytes(b"ID3" + b"\0" * 997)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    with pytest.raises(RuntimeError, match="lights-30s"):
+        site.build(root, root / "site", root / "work", run=run, songs=[song1, song2])
+
+    # Verify existing media is untouched (byte-identical)
+    assert (root / "site" / "media" / "discipline-30s-original.mp3").read_bytes() == original_media
+    # Verify data.json is untouched
+    assert json.loads((root / "site" / "data.json").read_text()) == old_data
+    # Verify no staging directory left behind
+    assert not (root / "site" / ".media.part").exists()

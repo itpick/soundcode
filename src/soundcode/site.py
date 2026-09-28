@@ -101,9 +101,13 @@ def _check(proc, slug: str, what: str):
         raise RuntimeError(f"{slug}: {what} failed ({tail[0]})")
 
 
-def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict) -> dict:
+def _parse_file_cached(path: Path):
     from .parser import parse_file
-    doc = parse_file(str(sc_path))
+    return parse_file(str(path))
+
+
+def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media: dict) -> dict:
+    doc = _parse_file_cached(sc_path)
     raw, gz = sc_sizes(sc_path.read_text())
     sizes = {"wav": wav_bytes(_frames(clip)), "mp3": clip.stat().st_size, "sc": raw, "sc_gz": gz,
              "kit": kit_bytes(doc), "voice": voice_bytes(doc, singer)}
@@ -117,37 +121,47 @@ def song_entry(song: dict, sc_path: Path, clip: Path, singer: str | None, media:
 def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: bool = False,
           songs: list[dict] = SONGS) -> dict:
     root, site_dir, work = Path(root), Path(site_dir), Path(work)
+    media_staging = site_dir / ".media.part"
     media = site_dir / "media"
-    media.mkdir(parents=True, exist_ok=True)
+    if media_staging.exists():
+        shutil.rmtree(media_staging)
+    media_staging.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "SOUNDCODE_SEEDVC_HOST": os.environ.get("SOUNDCODE_SEEDVC_HOST", "framepick")}
     cli = [sys.executable, "-m", "soundcode.cli"]
     entries = []
-    for song in songs:
-        slug, clip = song["slug"], root / song["clip"]
-        sc, wav, log = work / f"{slug}.sc", work / f"{slug}.wav", work / f"{slug}.render.log"
-        if _stale(sc, clip, force):
-            _check(run([*cli, "encode", str(clip), "--title", song["title"], "--artist", ARTIST, "-o", str(sc)],
-                       capture_output=True, text=True, env=env, cwd=root), slug, "encode")
-        if _stale(wav, sc, force):
-            proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav)],
-                       capture_output=True, text=True, env=env, cwd=root)
-            _check(proc, slug, "render")
-            log.write_text(proc.stderr or "")
-        from .parser import parse_file
-        singer = singer_from_log(log.read_text() if log.exists() else "", parse_file(str(sc)))
-        names = {"original": f"media/{slug}-original.mp3", "rebuild": f"media/{slug}-rebuild.mp3",
-                 "sc": f"media/{slug}.sc"}
-        shutil.copyfile(clip, site_dir / names["original"])
-        shutil.copyfile(sc, site_dir / names["sc"])
-        _check(run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "192k",
-                    str(site_dir / names["rebuild"])], capture_output=True, text=True), slug, "mp3")
-        entries.append(song_entry(song, sc, clip, singer, names))
-    tot = {k: sum(e["sizes"][k] for e in entries) for k in ("wav", "mp3", "sc", "sc_gz")}
-    tot["borrowed"] = sum(e["sizes"]["kit"] + e["sizes"]["voice"] for e in entries)
-    data = {"built": _dt.date.today().isoformat(), "credit": CREDIT, "license_url": LICENSE_URL,
-            "songs": entries, "totals": tot}
-    tmp = site_dir / "data.json.part"
-    tmp.write_text(json.dumps(data, indent=1))
-    tmp.replace(site_dir / "data.json")                 # atomic: a failed build keeps the old page data
-    return data
+    try:
+        for song in songs:
+            slug, clip = song["slug"], root / song["clip"]
+            sc, wav, log = work / f"{slug}.sc", work / f"{slug}.wav", work / f"{slug}.render.log"
+            if _stale(sc, clip, force):
+                _check(run([*cli, "encode", str(clip), "--title", song["title"], "--artist", ARTIST, "-o", str(sc)],
+                           capture_output=True, text=True, env=env, cwd=root), slug, "encode")
+            if _stale(wav, sc, force):
+                proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav)],
+                           capture_output=True, text=True, env=env, cwd=root)
+                _check(proc, slug, "render")
+                log.write_text(proc.stderr or "")
+            singer = singer_from_log(log.read_text() if log.exists() else "", _parse_file_cached(sc))
+            names = {"original": f"media/{slug}-original.mp3", "rebuild": f"media/{slug}-rebuild.mp3",
+                     "sc": f"media/{slug}.sc"}
+            shutil.copyfile(clip, media_staging / f"{slug}-original.mp3")
+            shutil.copyfile(sc, media_staging / f"{slug}.sc")
+            _check(run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-b:a", "192k",
+                        str(media_staging / f"{slug}-rebuild.mp3")], capture_output=True, text=True), slug, "mp3")
+            entries.append(song_entry(song, sc, clip, singer, names))
+        tot = {k: sum(e["sizes"][k] for e in entries) for k in ("wav", "mp3", "sc", "sc_gz")}
+        tot["borrowed"] = sum(e["sizes"]["kit"] + e["sizes"]["voice"] for e in entries)
+        data = {"built": _dt.date.today().isoformat(), "credit": CREDIT, "license_url": LICENSE_URL,
+                "songs": entries, "totals": tot}
+        tmp = site_dir / "data.json.part"
+        tmp.write_text(json.dumps(data, indent=1))
+        if media.exists():
+            shutil.rmtree(media)
+        media_staging.replace(media)
+        tmp.replace(site_dir / "data.json")             # atomic: a failed build keeps the old page data
+        return data
+    except Exception:
+        if media_staging.exists():
+            shutil.rmtree(media_staging)
+        raise
