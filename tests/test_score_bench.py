@@ -23,9 +23,10 @@ from soundcode.score import bench  # noqa: E402
 # fakes
 # --------------------------------------------------------------------------
 
-def _fake_run(calls=None):
+def _fake_run(calls=None, separate_returncode=0, separate_stdout=None):
     """Stands in for subprocess.run across ffmpeg, `soundcode.cli` and git:
-    writes the files each real call would produce."""
+    writes the files each real call would produce. `separate_returncode` and
+    `separate_stdout` can override the default separate behavior for testing."""
     calls = calls if calls is not None else []
 
     def run(cmd, **k):
@@ -41,9 +42,12 @@ def _fake_run(calls=None):
         if sub == "separate":
             out = Path(cmd[cmd.index("-o") + 1])
             out.mkdir(parents=True, exist_ok=True)
-            (out / "piano.wav").write_bytes(b"RIFF")
-            (out / "lead_vocals.wav").write_bytes(b"RIFF")
-            return subprocess.CompletedProcess(cmd, 0, "", "")
+            if separate_returncode == 0 or separate_returncode == 1:
+                # For code 0 or 1, create the stems
+                (out / "piano.wav").write_bytes(b"RIFF")
+                (out / "lead_vocals.wav").write_bytes(b"RIFF")
+            stdout_msg = separate_stdout if separate_stdout is not None else ""
+            return subprocess.CompletedProcess(cmd, separate_returncode, stdout_msg, "")
         if sub == "encode":
             out = Path(cmd[cmd.index("-o") + 1])
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +218,67 @@ def test_prepare_failing_stage_names_the_song_and_the_stage(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"song-a: encode failed \(last line here\)"):
         bench.prepare(ENTRY_A, tmp_path, run=run)
+
+
+def test_prepare_separate_sum_check_failure_is_a_warning_not_a_crash(tmp_path, capsys):
+    """Exit code 1 from separate when stems are written + 'sum check: FAILED'
+    in stdout is treated as a warning, not a crash. Prepare continues and
+    marks the entry with sum_check_failed: True."""
+    _mk_source(tmp_path, ENTRY_A)
+    run, _ = _fake_run(separate_returncode=1,
+                       separate_stdout="sum check: FAILED  (level diff +0.6 dB, residual -60.0 dB)  -> out")
+    paths = bench.prepare(ENTRY_A, tmp_path, run=run)
+    assert paths["sum_check_failed"] is True
+    # The warning was printed to stderr
+    out = capsys.readouterr()
+    assert "song-a: separation sum check failed (stems kept)" in out.err
+    # But prepare continues: encode, render still ran
+    assert paths["sc"].exists()
+    assert paths["rebuild"].exists()
+
+
+def test_prepare_separate_code_1_without_stems_is_a_crash(tmp_path):
+    """Exit code 1 from separate without stems present is still a crash."""
+    _mk_source(tmp_path, ENTRY_A)
+    default_run, _ = _fake_run()
+
+    def run_no_stems(cmd, **k):
+        if len(cmd) > 3 and cmd[3] == "separate":
+            # Code 1 but don't create stems, and no "sum check: FAILED" message
+            return subprocess.CompletedProcess(cmd, 1, "some error", "")
+        return default_run(cmd, **k)
+
+    with pytest.raises(RuntimeError, match=r"song-a: separate failed"):
+        bench.prepare(ENTRY_A, tmp_path, run=run_no_stems)
+
+
+def test_prepare_separate_code_2_shows_meaningful_error_not_info_line(tmp_path):
+    """Exit code 2 (real error) shows the last meaningful line, skipping
+    INFO logs and progress lines."""
+    _mk_source(tmp_path, ENTRY_A)
+
+    def run_with_error(cmd, **k):
+        if len(cmd) > 3 and cmd[3] == "separate":
+            stderr = "some processing\n - INFO - Processing step 1\n - INFO - Processing step 2\nreal error here"
+            return subprocess.CompletedProcess(cmd, 2, "", stderr)
+        return _fake_run()[0](cmd, **k)
+
+    with pytest.raises(RuntimeError, match=r"song-a: separate failed \(real error here\)"):
+        bench.prepare(ENTRY_A, tmp_path, run=run_with_error)
+
+
+def test_prepare_separate_code_2_with_tqdm_shows_meaningful_error(tmp_path):
+    """Exit code 2 with tqdm progress lines still shows the actual error message."""
+    _mk_source(tmp_path, ENTRY_A)
+
+    def run_with_error(cmd, **k):
+        if len(cmd) > 3 and cmd[3] == "separate":
+            stderr = "step 1 100%|####| 10/10 [00:01<00:00, 10it/s]\nActual failure reason: disk full"
+            return subprocess.CompletedProcess(cmd, 2, "", stderr)
+        return _fake_run()[0](cmd, **k)
+
+    with pytest.raises(RuntimeError, match=r"song-a: separate failed \(Actual failure reason: disk full\)"):
+        bench.prepare(ENTRY_A, tmp_path, run=run_with_error)
 
 
 # --------------------------------------------------------------------------
@@ -643,6 +708,35 @@ def test_calibrate_writes_anchors_sorted_and_compact(tmp_path, monkeypatch):
     assert _index_containing('"chroma":') < _index_containing('"z_metric":')
     # still valid, round-tripping JSON with the same values
     assert json.loads(text)["alpha"]["chroma"]["ceiling"] == pytest.approx(0.98)
+
+
+def test_calibrate_separate_sum_check_failure_is_a_warning_not_a_crash(tmp_path, monkeypatch, capsys):
+    """Calibrate's separate calls also handle exit code 1 (sum check failure)
+    as a warning, not a crash, so calibration continues to measure."""
+    _mk_calib_sources(tmp_path)
+    monkeypatch.setattr(bench, "TIERS", {"A": _CALIB_ENTRIES, "B": [], "C": []})
+    monkeypatch.setattr(bench.scorer, "PART_TYPE", {"piano": "pitched"})
+    monkeypatch.setattr(bench.scorer, "is_active", lambda path: True)
+
+    run, _ = _fake_run(separate_returncode=1,
+                       separate_stdout="sum check: FAILED  (level diff +0.6 dB)")
+
+    def fake_part_metrics(ref_path, est_path, key, *, doc=None, drum_cache=None):
+        return {"note_f1": 0.8}
+
+    monkeypatch.setattr(bench.scorer, "part_metrics", fake_part_metrics)
+
+    anchors_path = tmp_path / "anchors.json"
+    _write_anchors(anchors_path, {
+        "pitched": {"note_f1": {"floor": 0.0, "ceiling": 0.5, "weight": 1, "axis": "what"}}})
+
+    res = bench.calibrate(tmp_path, run=run, anchors_path=anchors_path)
+
+    # Calibration succeeded despite sum check failures
+    assert res["ceilings"]["pitched"]["note_f1"] == pytest.approx(0.8)
+    # Warning was printed for each sum check failure (one per separate call)
+    out = capsys.readouterr()
+    assert "separation sum check failed" in out.err
 
 
 # --------------------------------------------------------------------------

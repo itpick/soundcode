@@ -87,8 +87,17 @@ def _stale(out: Path, src: Path, force: bool) -> bool:
 
 def _check(proc, name: str, stage: str) -> None:
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-1:] or [str(proc.returncode)]
-        raise RuntimeError(f"{name}: {stage} failed ({tail[0]})")
+        # Find the last meaningful line (skip INFO logs and tqdm progress lines)
+        output = (proc.stderr or proc.stdout or "").strip()
+        lines = output.splitlines()
+        meaningful_line = None
+        for line in reversed(lines):
+            # Skip INFO log lines and tqdm progress lines
+            if " - INFO - " not in line and "it/s]" not in line:
+                meaningful_line = line
+                break
+        tail = meaningful_line or str(proc.returncode)
+        raise RuntimeError(f"{name}: {stage} failed ({tail})")
 
 
 def _needs_cut(entry: dict) -> bool:
@@ -126,15 +135,34 @@ def _run_cut(entry: dict, root: Path, force: bool, run) -> tuple[Path, float]:
     return original, time.monotonic() - t0
 
 
-def _run_separate(name: str, original: Path, stems_dir: Path, root: Path, force: bool, run) -> float:
+def _run_separate(name: str, original: Path, stems_dir: Path, root: Path, force: bool, run,
+                   stage: str = "separate") -> tuple[float, bool]:
     """Separate `original` into `stems_dir` (the `soundcode separate` CLI),
-    cached by mtime unless `force`. Returns seconds (0.0 when cached)."""
+    cached by mtime unless `force`. Returns (seconds, sum_check_failed) where seconds
+    is 0.0 when cached, and sum_check_failed indicates if the separation completed
+    but the stem sum check failed (a warning, not a crash). Exit code 1 with stems
+    present and "sum check: FAILED" in stdout is treated as a warning; any other
+    non-zero exit raises."""
     if not (_stale(stems_dir, original, force) or not any(stems_dir.glob("*.wav"))):
-        return 0.0
+        return 0.0, False
     t0 = time.monotonic()
     cmd = [sys.executable, "-m", "soundcode.cli", "separate", str(original), "-o", str(stems_dir)]
-    _check(run(cmd, capture_output=True, text=True, cwd=root), name, "separate")
-    return time.monotonic() - t0
+    proc = run(cmd, capture_output=True, text=True, cwd=root)
+
+    # Handle exit code 1: check if it's a sum check failure (stems were written)
+    if proc.returncode == 1:
+        # Check if stems were written and stdout contains "sum check: FAILED"
+        stems_exist = (stems_dir / "lead_vocals.wav").exists()
+        has_failed_msg = "sum check: FAILED" in (proc.stdout or "")
+        if stems_exist and has_failed_msg:
+            print(f"{name}: separation sum check failed (stems kept)", file=sys.stderr)
+            return time.monotonic() - t0, True
+
+    # Any other non-zero exit is a real error
+    if proc.returncode != 0:
+        _check(proc, name, stage)
+
+    return time.monotonic() - t0, False
 
 
 def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) -> dict:
@@ -144,8 +172,10 @@ def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) ->
     (a full stem set -- GBs for a full song) land under `out/bench` --
     reused run to run instead of each `encode` call leaving behind its own
     abandoned `sc-*` temp dir under the system temp directory. Returns
-    `{name, original, stems_dir, sc, parts_dir, rebuild, timing}`, where
-    `timing` is `{stage: seconds}` for every stage (0.0 when cached)."""
+    `{name, original, stems_dir, sc, parts_dir, rebuild, timing, sum_check_failed}`,
+    where `timing` is `{stage: seconds}` for every stage (0.0 when cached) and
+    `sum_check_failed` is True if the separation succeeded but the stem sum check
+    failed (a quality warning, not a failure)."""
     root = Path(root)
     name = entry["name"]
     timing: dict[str, float] = {}
@@ -158,7 +188,7 @@ def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) ->
     original, timing["cut"] = _run_cut(entry, root, force, run)
 
     stems_dir = root / "out" / "stems" / name
-    timing["separate"] = _run_separate(name, original, stems_dir, root, force, run)
+    timing["separate"], sum_check_failed = _run_separate(name, original, stems_dir, root, force, run)
 
     bench_dir = root / "out" / "bench" / name
     sc = bench_dir / f"{name}.sc"
@@ -189,7 +219,7 @@ def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) ->
         timing["render"] = 0.0
 
     return {"name": name, "original": original, "stems_dir": stems_dir, "sc": sc,
-            "parts_dir": parts_dir, "rebuild": rebuild, "timing": timing}
+            "parts_dir": parts_dir, "rebuild": rebuild, "timing": timing, "sum_check_failed": sum_check_failed}
 
 
 # --------------------------------------------------------------------------
@@ -576,8 +606,11 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
         calib_dir = root / "out" / "bench" / "calib" / name
         if calib_dir.exists():        # never cached -- a stale stem from a
             fsutil.rmtree(calib_dir)  # previous calibrate must not linger
-        cmd = [sys.executable, "-m", "soundcode.cli", "separate", str(originals[name]), "-o", str(calib_dir)]
-        _check(run(cmd, capture_output=True, text=True, cwd=root), name, "calibrate-separate")
+        # Note: _run_separate is designed for the prepare() stage, but works for
+        # calibration too; we ignore the sum_check_failed return value since
+        # calibration continues even if a sum check fails
+        _, _ = _run_separate(name, originals[name], calib_dir, root, False, run,
+                            stage="calibrate-separate")
         calib_dirs[name] = calib_dir
 
     ceiling_pairs = [(stems_dirs[e["name"]], calib_dirs[e["name"]]) for e in entries]
