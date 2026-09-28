@@ -192,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
                       f"{f(r['notes_f1_octave']):>8}{f(r['chroma']):>8}"
                       f"{f(r['onset_f1']):>8}{f(r['energy_corr']):>8}"
                       f"{f(r.get('spectral_db'), '.1f'):>8}")
+            lyr = rep.get("lyrics") or {}
+            if lyr.get("lyric_wer") is not None or lyr.get("sung_wer") is not None:
+                print(f"lyrics: wer vs published {f(lyr.get('lyric_wer'))}, "
+                      f"sung intelligibility wer {f(lyr.get('sung_wer'))}")
             lv = rep["stems"].get("lead_vocals", {})
             if "pitch_cents" in lv:
                 print(f"lead_vocals sung: pitch error {f(lv['pitch_cents'], '.0f')} c, "

@@ -164,6 +164,55 @@ def spectral_db(y_ref, y_est, sr) -> float | None:
     return float(np.mean(np.abs(a[live] - b[live]))) if live.any() else None
 
 
+def wer(ref: list[str], hyp: list[str]) -> float:
+    if not ref:
+        return 1.0 if hyp else 0.0
+    d = list(range(len(hyp) + 1))
+    for i, r in enumerate(ref, 1):
+        prev, d[0] = d[0], i
+        for j, h in enumerate(hyp, 1):
+            cur = min(d[j] + 1, d[j - 1] + 1, prev + (r != h))
+            prev, d[j] = d[j], cur
+    return d[len(hyp)] / len(ref)
+
+
+def _sc_words(doc) -> list[str]:
+    from .lyrics import normalise
+    s = doc.stream("text.vox")
+    return [w for e in (s.events if s else []) if e.text
+            for w in (normalise(x) for x in e.text.replace("-", " ").split()) if w]
+
+
+def lyric_wer(doc) -> float | None:
+    """.sc lyrics vs the published lyrics in the clip window (cache only: never
+    hits the network from compare)."""
+    from . import lyrics as ly
+
+    title = doc.header.get("title", "").strip('"') or None
+    artist = doc.header.get("artist", "").strip('"') or None
+    t, a = ly.guess_title_artist(Path(doc.header.get("source", "x")), title, artist)
+    lines = ly.lookup(t, a, None, offline=True)
+    if not lines:
+        return None
+    off = float(doc.header.get("offset", 0) or 0)
+    ref = [w for _, w in ly.ref_words(lines, off, off + (doc.duration or 1e9))]
+    return wer(ref, _sc_words(doc)) if ref else None
+
+
+def sung_wer(doc, wav) -> float | None:
+    """How many of the .sc's words a listener (whisper-small) recovers from the sung vocal."""
+    from faster_whisper import WhisperModel
+
+    from .lyrics import normalise
+    ref = _sc_words(doc)
+    if not ref:
+        return None
+    segs, _ = WhisperModel("small", device="cpu", compute_type="int8").transcribe(
+        str(wav), language="en")
+    heard = [w for s in segs for w in (normalise(x) for x in s.text.replace("-", " ").split()) if w]
+    return wer(ref, heard)
+
+
 def blocks_from_grid(doc, duration: float) -> list[tuple[float, float]]:
     from .expand import build_grid
 
@@ -242,6 +291,7 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
 
     # rendered side, per stem
     rend = {s: np.zeros(n, np.float32) for s in STEMS}
+    sung_wav = None
     doc = None
     if sc_or_wav.suffix == ".sc":
         doc = parse_file(str(sc_or_wav))
@@ -270,6 +320,7 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
 
             from . import sing
             wav, _ = sing.sing(doc, voice_ref)
+            sung_wav = wav
             rend["lead_vocals"] = sung_stream(doc, wav, n)
             notes_side["sung"] = "lead_vocals row compares the sung vocal (DiffSinger -> Seed-VC)"
     else:
@@ -309,6 +360,8 @@ def run(original, sc_or_wav, out_dir, engine: str = "sf2",
             row["voice_sim"] = voice_similarity(yo, yr, SR)
         report["stems"][s] = row
 
+    report["lyrics"] = {"lyric_wer": lyric_wer(doc) if doc is not None else None,
+                        "sung_wer": sung_wer(doc, sung_wav) if doc is not None and sung_wav else None}
     _plots(out, orig, rend, report)
     (out / "report.json").write_text(json.dumps(json_safe(report), indent=2, allow_nan=False))
     _html(out, report)

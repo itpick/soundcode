@@ -39,9 +39,13 @@ def normalise(word: str) -> str:
 
 def guess_title_artist(path: Path, title: str | None = None,
                        artist: str | None = None) -> tuple[str, str | None]:
-    if title:
+    if title and artist:
         return title, artist
-    stem = Path(path).stem
+    t, a = _from_name(Path(path).stem)
+    return (title or t), (artist or (a if not title or t.lower() == title.lower() else None))
+
+
+def _from_name(stem: str) -> tuple[str, str | None]:
     if " - " in stem:
         a, t = stem.split(" - ", 1)
         return t.strip(), a.strip()
@@ -49,7 +53,7 @@ def guess_title_artist(path: Path, title: str | None = None,
         t, a = stem.rsplit("-", 1)
         a = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", a).strip()          # JordanFelix -> Jordan Felix
         return t.strip(), a or None
-    return stem, artist
+    return stem, None
 
 
 def _get(url: str) -> object:
@@ -70,12 +74,14 @@ def _lines(rec: dict) -> list[Line]:
 
 
 def lookup(title: str, artist: str | None, duration: float | None,
-           cache: Path = Path("out/lyrics")) -> list[Line] | None:
+           cache: Path = Path("out/lyrics"), offline: bool = False) -> list[Line] | None:
     key = re.sub(r"[^a-z0-9]+", "-", f"{artist or ''}-{title}".lower()).strip("-")
     path = Path(cache) / f"{key}.json"
     if path.exists():
         rec = json.loads(path.read_text())
         return _lines(rec) if rec else None
+    if offline:
+        return None
     try:
         q = {"track_name": title} | ({"artist_name": artist} if artist else {})
         rec = None

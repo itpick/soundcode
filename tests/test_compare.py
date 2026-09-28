@@ -210,3 +210,23 @@ def test_compare_passes_no_fx_to_the_renderer(tmp_path, monkeypatch):
     monkeypatch.setattr(cmp, "transcribe", lambda p: (np.zeros((0, 2)), np.zeros(0)))
     cmp.run(tmp_path / "o.wav", sc, tmp_path / "c", stems_dir=d, no_fx=True)
     assert seen["no_fx"] is True
+
+
+def test_wer():
+    assert cmp.wer("a b c d".split(), "a b c d".split()) == 0.0
+    assert cmp.wer("a b c d".split(), "a x c".split()) == pytest.approx(0.5)
+    assert cmp.wer([], ["a"]) == 1.0
+
+
+def test_lyric_wer_uses_only_the_cached_reference(tmp_path, monkeypatch):
+    import json
+    from soundcode import lyrics as ly
+    from soundcode.parser import parse
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "out" / "lyrics").mkdir(parents=True)
+    (tmp_path / "out" / "lyrics" / "nobody-harbor.json").write_text(json.dumps(
+        {"syncedLyrics": "[00:00.50] walk me down to the harbor"}))
+    doc = parse('%sc 0.3\n@title "harbor"\n@source harbor-Nobody.wav\n@duration 10.0\n\n'
+                ':text.vox\n@0.5 "walk" | @0.8 "me" | @1.0 "down" | @1.2 "to" | @1.4 "the" | @1.6 "harder"\n')
+    monkeypatch.setattr(ly.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
+    assert cmp.lyric_wer(doc) == pytest.approx(1 / 6)
