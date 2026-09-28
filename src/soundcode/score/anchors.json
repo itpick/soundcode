@@ -1,53 +1,53 @@
 {
-  "pitched": {
-    "note_f1":         {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
-    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
-    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
-    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
-    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
-    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
-    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
-  },
   "bass": {
-    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
-    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "f0_cents":        {"floor": 300, "ceiling": 10,   "weight": 1,   "axis": "what"},
-    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
-    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
-    "logspec_db":      {"floor": 12,  "ceiling": 1.5,  "weight": 1,   "axis": "sound"},
-    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
-    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
-    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+    "chroma": {"floor": 0.7735821008682251, "ceiling": 0.999076783657074, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": 0.12740623911804327, "ceiling": 0.9852741801947738, "weight": 1, "axis": "dyn"},
+    "f0_cents": {"floor": 300, "ceiling": 10, "weight": 1, "axis": "what"},
+    "lag_ms_abs": {"floor": 738.3219954648525, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "level_diff_db_abs": {"floor": 21.290042608415913, "ceiling": 0.19922077409353278, "weight": 0.1, "axis": "dyn"},
+    "logspec_db": {"floor": 7.798762166079189, "ceiling": 0.46670404327004517, "weight": 1, "axis": "sound"},
+    "mert": {"floor": 0.7925771176815033, "ceiling": 0.9969334304332733, "weight": 1, "axis": "sound"},
+    "onset_f1": {"floor": 0.4661016949152542, "ceiling": 0.8299034995930705, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 9.818516004767819, "ceiling": 0.38603877715012974, "weight": 0.1, "axis": "sound"}
   },
   "drums": {
-    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "drum_voice_f1":   {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
-    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
-    "decay_ratio_err": {"floor": 1.0, "ceiling": 0.05, "weight": 1,   "axis": "sound"},
-    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
-    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"}
-  },
-  "vocal": {
-    "f0_cents":        {"floor": 300, "ceiling": 10,   "weight": 1,   "axis": "what"},
-    "word_mae_s":      {"floor": 0.5, "ceiling": 0.05, "weight": 1,   "axis": "what"},
-    "sung_wer_excess": {"floor": 0.6, "ceiling": 0.0,  "weight": 1,   "axis": "what"},
-    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
-    "voice_sim":       {"floor": 0.6, "ceiling": 0.95, "weight": 1,   "axis": "sound"},
-    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
-    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
-    "env_corr":        {"floor": 0.0, "ceiling": 0.95, "weight": 1,   "axis": "dyn"},
-    "level_diff_db_abs": {"floor": 12, "ceiling": 0.5, "weight": 0.1, "axis": "dyn"}
+    "decay_ratio_err": {"floor": 0.42541665191688205, "ceiling": 0.050909202292313174, "weight": 1, "axis": "sound"},
+    "drum_voice_f1": {"floor": 0.09725843074594233, "ceiling": 0.9748425771909959, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": -0.059901846491483654, "ceiling": 0.9997179772557083, "weight": 1, "axis": "dyn"},
+    "lag_ms_abs": {"floor": 678.4580498866212, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "mert": {"floor": 0.8841835260391235, "ceiling": 0.9999551773071289, "weight": 1, "axis": "sound"},
+    "onset_f1": {"floor": 0.4827586206896552, "ceiling": 0.9929577464788732, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 4.007921557853116, "ceiling": 0.041477851597161886, "weight": 0.1, "axis": "sound"}
   },
   "mix": {
-    "chroma":          {"floor": 0.5, "ceiling": 0.98, "weight": 1,   "axis": "what"},
-    "onset_f1":        {"floor": 0.0, "ceiling": 0.9,  "weight": 1,   "axis": "what"},
-    "lag_ms_abs":      {"floor": 150, "ceiling": 5,    "weight": 1,   "axis": "what"},
-    "mert":            {"floor": 0.6, "ceiling": 0.97, "weight": 1,   "axis": "sound"},
-    "spectral_db":     {"floor": 12,  "ceiling": 1.0,  "weight": 0.1, "axis": "sound"},
-    "width_diff":      {"floor": 0.5, "ceiling": 0.02, "weight": 1,   "axis": "sound"},
-    "lufs_diff_abs":   {"floor": 10,  "ceiling": 0.5,  "weight": 1,   "axis": "dyn"}
+    "chroma": {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"},
+    "lag_ms_abs": {"floor": 150, "ceiling": 5, "weight": 1, "axis": "what"},
+    "lufs_diff_abs": {"floor": 10, "ceiling": 0.5, "weight": 1, "axis": "dyn"},
+    "mert": {"floor": 0.6, "ceiling": 0.97, "weight": 1, "axis": "sound"},
+    "onset_f1": {"floor": 0.0, "ceiling": 0.9, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 12, "ceiling": 1.0, "weight": 0.1, "axis": "sound"},
+    "width_diff": {"floor": 0.5, "ceiling": 0.02, "weight": 1, "axis": "sound"}
+  },
+  "pitched": {
+    "chroma": {"floor": 0.8758118748664856, "ceiling": 0.9997322857379913, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": 0.05221177870469225, "ceiling": 0.9609070342764469, "weight": 1, "axis": "dyn"},
+    "lag_ms_abs": {"floor": 855.5555555555555, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "level_diff_db_abs": {"floor": 10.232577840413066, "ceiling": 0.42003190993894357, "weight": 0.1, "axis": "dyn"},
+    "logspec_db": {"floor": 7.112918881587089, "ceiling": 0.4808705049554425, "weight": 1, "axis": "sound"},
+    "mert": {"floor": 0.7288308143615723, "ceiling": 0.9957681596279144, "weight": 1, "axis": "sound"},
+    "note_f1": {"floor": 0.032131611078979494, "ceiling": 0.7700029967036259, "weight": 1, "axis": "what"},
+    "onset_f1": {"floor": 0.13030560271646857, "ceiling": 0.8503852080123266, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 8.070430452681624, "ceiling": 0.8119190605848543, "weight": 0.1, "axis": "sound"}
+  },
+  "vocal": {
+    "env_corr": {"floor": -0.05123157057561975, "ceiling": 1.0, "weight": 1, "axis": "dyn"},
+    "f0_cents": {"floor": 747.2572326660156, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "lag_ms_abs": {"floor": 758.2766439909296, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "level_diff_db_abs": {"floor": 9.56417225845599, "ceiling": 0.0, "weight": 0.1, "axis": "dyn"},
+    "mert": {"floor": 0.8827174305915833, "ceiling": 1.0, "weight": 1, "axis": "sound"},
+    "spectral_db": {"floor": 17.866181691058458, "ceiling": 0.0, "weight": 0.1, "axis": "sound"},
+    "sung_wer_excess": {"floor": 0.6, "ceiling": 0.0, "weight": 1, "axis": "what"},
+    "voice_sim": {"floor": 0.6482194066047668, "ceiling": 1.0, "weight": 1, "axis": "sound"},
+    "word_mae_s": {"floor": 7.5200000000000005, "ceiling": 0.009999999999999787, "weight": 1, "axis": "what"}
   }
 }
