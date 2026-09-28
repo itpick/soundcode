@@ -22,7 +22,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -31,6 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from . import anchors, report, scorer
+from .. import fsutil
 
 # --------------------------------------------------------------------------
 # The benchmark set (design doc, "Benchmark set")
@@ -575,7 +575,7 @@ def calibrate(root: Path, run=subprocess.run, anchors_path: Path | None = None) 
         name = entry["name"]
         calib_dir = root / "out" / "bench" / "calib" / name
         if calib_dir.exists():        # never cached -- a stale stem from a
-            shutil.rmtree(calib_dir)  # previous calibrate must not linger
+            fsutil.rmtree(calib_dir)  # previous calibrate must not linger
         cmd = [sys.executable, "-m", "soundcode.cli", "separate", str(originals[name]), "-o", str(calib_dir)]
         _check(run(cmd, capture_output=True, text=True, cwd=root), name, "calibrate-separate")
         calib_dirs[name] = calib_dir

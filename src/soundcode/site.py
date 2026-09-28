@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import fsutil
+
 SONGS = [
     {"slug": "discipline-30s", "title": "Discipline", "clip": "audio/test/discipline-30s.mp3"},
     {"slug": "lights_in_the_sky-30s", "title": "Lights in the Sky", "clip": "audio/test/lights_in_the_sky-30s.mp3"},
@@ -205,7 +207,7 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
     media_staging = site_dir / ".media.part"
     media = site_dir / "media"
     if media_staging.exists():
-        shutil.rmtree(media_staging)
+        fsutil.rmtree(media_staging)
     media_staging.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "SOUNDCODE_SEEDVC_HOST": os.environ.get("SOUNDCODE_SEEDVC_HOST", "framepick")}
@@ -226,7 +228,7 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
             parts_dir = work / f"{slug}.parts"
             if _stale(wav, sc, force) or not parts_dir.is_dir() or not log.exists():
                 if parts_dir.exists():
-                    shutil.rmtree(parts_dir)            # no part left over from an older render
+                    fsutil.rmtree(parts_dir)            # no part left over from an older render
                 proc = run([*cli, "render", str(sc), "--with-vocals", "-o", str(wav),
                             "--parts", str(parts_dir)],
                            capture_output=True, text=True, env=env, cwd=root)
@@ -247,11 +249,11 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
         tmp = site_dir / "data.json.part"
         tmp.write_text(json.dumps(data, indent=1))
         if media.exists():
-            shutil.rmtree(media)
+            fsutil.rmtree(media)
         media_staging.replace(media)
         tmp.replace(site_dir / "data.json")             # atomic: a failed build keeps the old page data
         return data
     except Exception:
         if media_staging.exists():
-            shutil.rmtree(media_staging)
+            fsutil.rmtree(media_staging)
         raise
