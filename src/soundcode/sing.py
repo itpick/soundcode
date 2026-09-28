@@ -52,13 +52,13 @@ def cache_key(doc, ref: Path, settings: dict) -> str:
 
 
 def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
-         steps: int = 30) -> tuple[Path, list[str]]:
+         steps: int = 50, durations: str = "model") -> tuple[Path, list[str]]:
     import soundfile as sf
 
     ref = voice_ref(doc, ref)
-    settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE"}
+    settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations}
     out = Path(cache) / f"{cache_key(doc, ref, settings)}.wav"
-    score = ss.build(doc)
+    score = ss.build(doc, durations=durations)
     if out.exists():
         try:
             import soundfile as _sf

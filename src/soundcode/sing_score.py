@@ -40,6 +40,7 @@ class Score:
     f0_hz: np.ndarray
     n_frames: int
     warnings: list[str] = field(default_factory=list)
+    spans: list[tuple[int, int]] = field(default_factory=list)   # phoneme index range per word
 
 
 def vocal_stream(doc) -> str:
@@ -148,7 +149,9 @@ def _f0(doc, notes, n: int) -> np.ndarray:
     return (440.0 * 2 ** ((cents - 6900) / 1200)).astype(np.float32)
 
 
-def build(doc, duration: float | None = None) -> Score:
+def build(doc, duration: float | None = None, durations: str = "heuristic") -> Score:
+    """durations: "heuristic" (70 ms consonants, vowel fills the note) or "model"
+    (the bank's own duration model, rescaled inside each word's span)."""
     stream = vocal_stream(doc)
     notes = vocal_notes(doc, stream)
     dur = duration or doc.duration or (max((b for _, b, _ in notes), default=1.0) + 1.0)
@@ -168,17 +171,22 @@ def build(doc, duration: float | None = None) -> Score:
             warn.append(f"{len(uncovered)} note(s) without words sung on 'ah'")
             ws = sorted(ws + [(a, b, "ah") for a, b in uncovered])
 
-    seq: list[tuple[str, float, float]] = []
+    seq: list[tuple[str, float, float, int]] = []          # phoneme, start, end, word id
     cur = 0.0
+    wid = [0]
+
+    def next_id() -> int:
+        wid[0] += 1
+        return wid[0]
 
     def gap(a: float, b: float) -> None:
         if b - a < 0.02:
             return
         if b - a > 0.45:
-            seq.append(("SP", a, b - 0.3))
-            seq.append(("AP", b - 0.3, b))
+            seq.append(("SP", a, b - 0.3, next_id()))
+            seq.append(("AP", b - 0.3, b, next_id()))
         else:
-            seq.append(("SP", a, b))
+            seq.append(("SP", a, b, next_id()))
 
     for i, (t, end, w) in enumerate(ws):
         nxt = ws[i + 1][0] if i + 1 < len(ws) else dur
@@ -194,6 +202,7 @@ def build(doc, duration: float | None = None) -> Score:
         if not hit:
             warn.append(f"no dictionary entry for '{w}': letter guess")
         syls = _syllables(phs)
+        word_id = next_id()
         inside = [x for x in notes if t - 0.03 <= x[0] < end]
         if len(inside) >= len(syls) > 1:
             bounds = [max(t, inside[k][0]) for k in range(len(syls))] + [end]
@@ -207,19 +216,33 @@ def build(doc, duration: float | None = None) -> Score:
             s = a
             for j, p in enumerate(syl):
                 d = cd if j != vi else max(0.03, b - n_coda * cd - s)
-                seq.append((p, s, s + d))
+                seq.append((p, s, s + d, word_id))
                 s += d
             cur = s
     if cur < dur:
         gap(cur, dur)
 
-    seq = [(p, a, b) for p, a, b in seq if b > a]
+    seq = [x for x in seq if x[2] > x[1]]
     frames, acc = [], 0
-    for i, (_, a, b) in enumerate(seq):
+    for i, (_, a, b, _w) in enumerate(seq):
         end_f = n if i == len(seq) - 1 else int(round(b * SR / HOP))
         frames.append(max(1, end_f - acc))
         acc += frames[-1]
     frames[-1] += n - sum(frames)
     if frames[-1] < 1:
         raise SingError("phoneme timing overflowed the song length")
-    return Score([p for p, _, _ in seq], frames, _f0(doc, notes, n), n, warn)
+    spans, start = [], 0
+    for i in range(1, len(seq) + 1):
+        if i == len(seq) or seq[i][3] != seq[start][3]:
+            spans.append((start, i))
+            start = i
+    phonemes = [x[0] for x in seq]
+    f0 = _f0(doc, notes, n)
+    if durations == "model":
+        from . import diffsinger
+        starts = np.concatenate([[0], np.cumsum(frames)[:-1]])
+        ph_midi = [int(round(69 + 12 * np.log2(max(float(f0[min(int(k), n - 1)]), 1.0) / 440.0)))
+                   for k in starts]
+        frames = diffsinger.predict_durations(phonemes, [i1 - i0 for i0, i1 in spans],
+                                              [int(sum(frames[i0:i1])) for i0, i1 in spans], ph_midi)
+    return Score(phonemes, frames, f0, n, warn, spans)

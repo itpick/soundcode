@@ -418,3 +418,18 @@ def test_sung_vocal_gets_the_lead_streams_fx(tmp_path):
                                  parse(base + "fx  rt60=1.5s  wet=0.35  width=0.5\n").stream("notes.lead"))
     tail = slice(int(0.6 * sr), int(1.2 * sr))
     assert np.abs(wet[tail]).mean() > 3 * np.abs(dry[tail]).mean()
+
+
+def test_model_durations_keep_word_boundaries_and_total_length():
+    if not _bank_present():
+        pytest.skip("no bank")
+    heur = ss.build(parse(SONG))
+    mod = ss.build(parse(SONG), durations="model")
+    assert sum(mod.frames) == mod.n_frames == heur.n_frames
+    assert mod.phonemes == heur.phonemes
+    assert mod.frames != heur.frames                        # the model actually changed timing
+    # word boundaries preserved: cumulative frames at each word start are equal
+    b_h = np.cumsum([0] + heur.frames)
+    b_m = np.cumsum([0] + mod.frames)
+    for i0, i1 in mod.spans:
+        assert b_h[i0] == b_m[i0] and b_h[i1] == b_m[i1]
