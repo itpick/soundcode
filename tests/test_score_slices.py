@@ -40,6 +40,13 @@ def test_sections_use_struct_when_it_has_two_labels():
     assert s[0].a == 0.0 and s[0].b == pytest.approx(8.0)
 
 
+def test_sections_leave_a_gap_uncovered_between_struct_segments():
+    doc = parse(GRID + "\n:struct\nintro 1-4 inst energy=0.2\nverse 7-10 vocal energy=0.5\n")
+    s = slices.sections(doc, 40.0)
+    assert s[0].label == "intro" and s[0].b == pytest.approx(8.0)    # bar 5's time
+    assert s[1].label == "verse" and s[1].a == pytest.approx(12.0)   # bar 7's time
+
+
 def test_active_gate():
     sr = 8000
     y = np.zeros(sr * 4, np.float32)
@@ -57,3 +64,22 @@ def test_lag_and_drift():
     d = align.drift(ref, late, sr, [slices.Slice("window", "0:00", 0.0, 20.0)])
     assert d[0]["drift"] and d[0]["lag_ms"] == pytest.approx(200, abs=10)
     assert align.lag_ms(np.zeros(sr * 20, np.float32), ref, sr, 0, 20) is None
+
+
+def test_drift_matches_per_window_lag_ms():
+    # Irregular click spacing avoids the periodic-autocorrelation ambiguity a
+    # uniform click train has over a +/-1.5 s lag search.
+    sr = 16000
+    dur = 60.0
+    rng = np.random.default_rng(0)
+    t = np.cumsum(rng.uniform(0.2, 0.6, size=200))
+    t = t[t < dur - 1.0]
+    ref = clicks(sr, t, int(sr * dur))
+    late = clicks(sr, t + 0.2, int(sr * dur))
+    wins = slices.windows(dur)
+    d = align.drift(ref, late, sr, wins)
+    assert len(d) > 2
+    for row, w in zip(d, wins):
+        expected = align.lag_ms(ref, late, sr, w.a, w.b)
+        assert row["lag_ms"] == pytest.approx(expected, abs=15)
+        assert row["lag_ms"] == pytest.approx(200, abs=15)

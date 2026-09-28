@@ -83,7 +83,14 @@ def _bar_windows(grid, duration: float, bars: int = 8) -> list[Slice]:
 
 
 def sections(doc: Document, duration: float) -> list[Slice]:
-    """Sections from :struct when it names ≥ 2 distinct labels, else 8-bar windows."""
+    """Sections from :struct when it names ≥ 2 distinct labels, else 8-bar windows.
+
+    Each section's end is `min(this segment's own hi+1 bar time, the next
+    segment's start time)` — a segment never stretches past its own declared
+    range to close a gap against its neighbor. If :struct leaves a gap
+    between two bar ranges (or before/after the whole set), that gap is left
+    uncovered rather than absorbed into an adjacent section.
+    """
     grid = build_grid(doc)
     segments = _struct_segments(doc)
     labels = {label for _, _, label in segments}
@@ -91,12 +98,11 @@ def sections(doc: Document, duration: float) -> list[Slice]:
         return _bar_windows(grid, duration)
 
     out: list[Slice] = []
-    for i, (lo, _hi, label) in enumerate(segments):
+    for i, (lo, hi, label) in enumerate(segments):
         a = grid.time_of(lo, 1.0)
+        b = grid.time_of(hi + 1, 1.0)
         if i + 1 < len(segments):
-            b = grid.time_of(segments[i + 1][0], 1.0)
-        else:
-            b = duration
+            b = min(b, grid.time_of(segments[i + 1][0], 1.0))
         b = min(b, duration)
         if b > a:
             out.append(Slice("section", label, a, b))
