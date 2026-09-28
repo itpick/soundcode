@@ -164,3 +164,24 @@ def test_soulx_settings_are_part_of_the_vocal_cache_key(tmp_path, monkeypatch):
     monkeypatch.setattr(soulx, "PROMPT_S", soulx.PROMPT_S + 4)
     b, _ = sing.sing(doc, ref=ref, cache=tmp_path, singer="soulx")
     assert a != b and len(calls) == 2
+
+
+def test_render_never_transposes_the_melody(tmp_path, monkeypatch):
+    # SoulX's --auto_shift moves every segment to the voice prompt's median pitch, each by its
+    # own amount: full-length Discipline was sung 2-9 semitones off, section by section.
+    import subprocess
+    import soundfile as sf
+    ref = tmp_path / "ref.wav"
+    sf.write(str(ref), np.zeros(44100 * 4, np.float32), 44100)
+    remote = []
+
+    def fake_run(cmd, **k):
+        if cmd[0] == "ssh" and "run.py" in cmd[-1]:
+            remote.append(cmd[-1])
+        if cmd[0] == "scp" and cmd[-1].endswith("generated.wav"):
+            sf.write(cmd[-1], np.zeros(24000, np.float32), 24000)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(soulx.subprocess, "run", fake_run)
+    soulx.render(parse(SONG), ref)
+    assert remote and "--auto_shift" not in remote[0] and "--pitch_shift 0" in remote[0]

@@ -181,7 +181,7 @@ def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:
 CONTROL = "melody"          # "melody" (f0 curve) or "score" (MIDI notes)
 PROMPT_S = 12.0
 SEED = 0                    # SoulX is a diffusion model: fixed so re-renders and A/B tests repeat
-ALIGN = 2                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
+ALIGN = 3                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
 
 
 def settings() -> dict:
@@ -254,7 +254,7 @@ def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None,
                   f"--prompt_wav_path ~/{job}/prompt.wav --prompt_metadata_path ~/{job}/prompt.json "
                   f"--target_metadata_path ~/{job}/target.json "
                   f"--phoneset_path soulxsinger/utils/phoneme/phone_set.json "
-                  f"--save_dir ~/{job}/out --auto_shift --pitch_shift 0 --control {control or CONTROL}")
+                  f"--save_dir ~/{job}/out --pitch_shift 0 --control {control or CONTROL}")
         out = tmp / "generated.wav"
         try:
             run([*ssh, f"mkdir -p {job}"], "mkdir")
