@@ -115,6 +115,16 @@ Depends on:
 - the per-stream renders already used by the renderer and the demo page's part toggles;
 - the benchmark scorer, to keep "faithful" renders from regressing.
 
+**Distribution (requested 2026-09-28).** Four sub-projects, each with its own spec, in this order:
+1. **A self-contained converter binary** per OS (`soundcode encode` / `render`): the Python engine packaged with PyInstaller/uv, with models downloaded into a cache on first run rather than bundled.
+2. **A desktop drag-and-drop app** for Mac, Linux and Windows. Tauri, with the converter as a sidecar, reusing the demo page's players and part toggles.
+3. **A browser converter.**
+   - `.sc` → audio fully client-side: the SoundFont synth and fx in WebAssembly.
+   - Audio → `.sc` only as a reduced ONNX/WebGPU encoder; full quality stays native or server-side.
+4. **A song-code server.** Upload a `.sc` with its title, browse the collection, and play it in the browser renderer.
+   - It is private at first and may go public later.
+   - **Lyrics rule (user, 2026-09-28):** the upload form has a checkbox, "this song isn't copyrighted". Lyrics are converted and stored only when it is checked; otherwise the `.sc` is stored without `:text.vox`. The checkbox is the uploader's attestation, and it is recorded with the upload.
+
 ## Known bugs (from review)
 
 - Every encoded note is +33 c sharp (`encode.py:439-441`).
