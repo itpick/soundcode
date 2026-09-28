@@ -86,3 +86,81 @@ def test_long_unbroken_singing_is_cut_at_a_rest_not_mid_note():
         assert all(float(d) >= 0.01 for d in s["duration"].split())
     total_notes = sum(1 for s in segs for t in s["note_type"].split() if t != "1")
     assert total_notes == 40                                                      # no note split in two
+
+
+# --- every word is sung (word-driven note alignment) --------------------------------------
+
+def test_a_long_note_spanning_two_words_is_split_so_both_are_sung():
+    doc = parse(SONG.replace("1:3.000  E4  2.000b 90", "1:3.000  E4  2.000b 90")
+                .replace('1:1.000 "hello" 1.000b | 1:3.000 "river" 2.000b',
+                         '1:1.000 "hello" 1.000b | 1:3.000 "down" 1.000b | 1:4.000 "river" 1.000b'))
+    s = soulx.metadata(doc, 0.0, 4.0)[0]
+    words = [t for t, ty in zip(s["text"].split(), s["note_type"].split()) if ty == "2"]
+    assert [w for w in words if w != "ah"] == ["hello", "down", "river"]
+
+
+def test_a_word_between_notes_still_gets_a_note():
+    # the E4 note is shortened to 1.0-1.1 s; "gap" is sung at 2.9-3.5 s where no note exists
+    doc2 = parse(SONG.replace("1:3.000  E4  2.000b 90", "1:3.000  E4  0.200b 90")
+                 .replace('1:1.000 "hello" 1.000b | 1:3.000 "river" 2.000b',
+                          '1:1.000 "hello" 1.000b | @2.9 "gap" 0.6s'))
+    s = soulx.metadata(doc2, 0.0, 4.0)[0]
+    text, types, pitch = s["text"].split(), s["note_type"].split(), s["note_pitch"].split()
+    k = text.index("gap")
+    assert types[k] == "2" and int(pitch[k]) > 0
+
+
+def test_river_sends_every_word(tmp_path):
+    p = Path(__file__).resolve().parents[1] / "out" / "sc" / "lv" / "river-30s.sc"
+    if not p.exists():
+        pytest.skip("no River .sc")
+    from soundcode.parser import parse_file
+    d = parse_file(str(p))
+    lyric = [w for a, _, w in ss.words(d) if a < d.duration - 0.05]
+    segs = soulx.metadata(d, 0.0, d.duration)
+    sung = [t for s in segs for t, ty in zip(s["text"].split(), s["note_type"].split()) if ty == "2"]
+    assert [w for w in sung if w != "ah"] == lyric
+
+
+def test_render_seeds_and_overrides_the_diffusion_settings(tmp_path, monkeypatch):
+    import subprocess
+    import soundfile as sf
+    ref = tmp_path / "ref.wav"
+    sf.write(str(ref), np.zeros(44100 * 4, np.float32), 44100)
+    cmds = []
+
+    def fake_run(cmd, **k):
+        cmds.append(cmd)
+        if cmd[0] == "scp" and cmd[-1].endswith("generated.wav"):
+            sf.write(cmd[-1], np.zeros(24000, np.float32), 24000)
+        if cmd[0] == "scp" and any(str(a).endswith("run.py") for a in cmd):
+            run_py = next(Path(a) for a in cmd if str(a).endswith("run.py"))
+            cmds.append(["run.py", run_py.read_text()])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(soulx.subprocess, "run", fake_run)
+    soulx.render(parse(SONG), ref, n_steps=64, cfg=5)
+    remote = next(c[-1] for c in cmds if c[0] == "ssh" and "run.py" in c[-1])
+    assert "run.py 0 " in remote                       # default seed 0 → repeatable renders
+    assert "n_steps:\\).*/\\1 64/" in remote and "cfg:\\).*/\\1 5.0/" in remote
+    assert "--config ~/" in remote                      # the job's edited copy, not the shipped config
+    assert "torch.manual_seed(s)" in next(c[1] for c in cmds if c[0] == "run.py")
+
+    cmds.clear()
+    soulx.render(parse(SONG), ref, seed=None)
+    remote = next(c[-1] for c in cmds if c[0] == "ssh" and "run.py" in c[-1])
+    assert "run.py -1 " in remote and "--config soulxsinger/config/soulxsinger.yaml" in remote
+
+
+
+def test_soulx_settings_are_part_of_the_vocal_cache_key(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(soulx, "render", lambda *a, **k: calls.append(1) or np.zeros(44100, np.float32))
+    ref = tmp_path / "ref.wav"
+    import soundfile as sf
+    sf.write(str(ref), np.zeros(44100, np.float32), 44100)
+    doc = parse(SONG)
+    a, _ = sing.sing(doc, ref=ref, cache=tmp_path, singer="soulx")
+    monkeypatch.setattr(soulx, "PROMPT_S", soulx.PROMPT_S + 4)
+    b, _ = sing.sing(doc, ref=ref, cache=tmp_path, singer="soulx")
+    assert a != b and len(calls) == 2

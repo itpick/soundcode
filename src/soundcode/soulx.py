@@ -48,21 +48,45 @@ def _phoneme(word: str) -> str:
 
 
 def _notes_with_words(doc) -> list[tuple[float, float, int, str, int]]:
-    """(start, end, midi, text, type) for every sung note, in order."""
+    """(start, end, midi, text, type) with every word sung.
+
+    Driven by the words, not the notes: a note spanning several words is split
+    at the word boundaries (same pitch), a word covering several notes sings
+    them as a melisma (type 3), and a word no note overlaps gets one at the
+    nearest note's pitch. Notes outside every word are sung on 'ah'.
+    (Note-driven assignment silently dropped 11 of River's 61 words.)"""
     notes = ss.vocal_notes(doc, ss.vocal_stream(doc))
-    ws = ss.words(doc)
-    out, last_word = [], None
-    for a, b, p in notes:
-        w = next((x for x in ws if x[0] - 0.03 <= a < x[1]), None)
-        if w is None:
+    ws = [w for w in ss.words(doc) if w[1] > w[0]]
+    out: list[tuple[float, float, int, str, int]] = []
+
+    def nearest_pitch(t: float) -> int:
+        if not notes:
+            return 60
+        return min(notes, key=lambda n: 0 if n[0] <= t < n[1] else min(abs(n[0] - t), abs(n[1] - t)))[2]
+
+    for k, (w0, w1, word) in enumerate(ws):
+        w1 = min(w1, ws[k + 1][0]) if k + 1 < len(ws) else w1
+        if w1 - w0 < 0.03:
+            w1 = w0 + 0.03
+        pieces = [(max(a, w0), min(b, w1), p) for a, b, p in notes if b > w0 and a < w1]
+        pieces = [x for x in pieces if x[1] - x[0] >= 0.02]
+        if not pieces:
+            pieces = [(w0, w1, nearest_pitch((w0 + w1) / 2))]
+        pieces[0] = (w0 if pieces[0][0] - w0 < 0.15 else pieces[0][0], pieces[0][1], pieces[0][2])
+        for m, (a, b, p) in enumerate(pieces):
+            out.append((a, b, p, word, 2 if m == 0 else 3))
+    covered = [(a, b) for a, b, *_ in out]
+    for a, b, p in notes:                               # notes no word touches: sung on 'ah'
+        if b - a >= 0.1 and not any(ca < b and cb > a for ca, cb in covered):
             out.append((a, b, p, "ah", 2))
-            last_word = None
-        elif w is last_word:
-            out.append((a, b, p, w[2], 3))
-        else:
-            out.append((a, b, p, w[2], 2))
-            last_word = w
-    return out
+    out.sort(key=lambda x: x[0])
+    clean: list[tuple[float, float, int, str, int]] = []
+    for x in out:                                       # keep strictly monotonic, no overlaps
+        if clean and x[0] < clean[-1][1]:
+            x = (clean[-1][1], x[1], x[2], x[3], x[4])
+        if x[1] - x[0] >= 0.01:
+            clean.append(x)
+    return clean
 
 
 def _f0(doc, t0: float, t1: float, notes) -> list[float]:
@@ -151,16 +175,32 @@ def prompt_window(doc, want_s: float = 8.0) -> tuple[float, float]:
         if b0 >= t0 + want_s * 0.6 and a1 - b0 >= 0.2:
             end = (b0 + a1) / 2
             break
-    return t0, min(end, t0 + 12.0)
+    return t0, min(end, t0 + max(12.0, want_s * 1.25))
 
 
-def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None) -> np.ndarray:
-    """Sing the whole vocal remotely; returns mono float32 at 44.1 kHz."""
+CONTROL = "melody"          # "melody" (f0 curve) or "score" (MIDI notes)
+PROMPT_S = 12.0
+SEED = 0                    # SoulX is a diffusion model: fixed so re-renders and A/B tests repeat
+ALIGN = 2                   # bump when the .sc → SoulX score mapping changes (invalidates cached vocals)
+
+
+def settings() -> dict:
+    """Everything besides the .sc and the reference that changes a SoulX render (for the cache key)."""
+    return {"control": CONTROL, "prompt_s": PROMPT_S, "seed": SEED, "align": ALIGN}
+
+
+def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None,
+           control: str | None = None, prompt_s: float | None = None,
+           n_steps: int | None = None, cfg: float | None = None, seed: int | None = SEED) -> np.ndarray:
+    """Sing the whole vocal remotely; returns mono float32 at 44.1 kHz.
+
+    `n_steps`/`cfg` override SoulX's diffusion steps and guidance scale (config defaults 32 / 3).
+    `seed` fixes torch/numpy/random so a render is repeatable; None leaves it random."""
     import librosa
     import soundfile as sf
 
     host = os.environ.get("SOUNDCODE_SOULX_HOST") or os.environ.get("SOUNDCODE_SEEDVC_HOST") or "framepick"
-    p0, p1 = prompt or prompt_window(doc)
+    p0, p1 = prompt or prompt_window(doc, prompt_s or PROMPT_S)
     dur = doc.duration or max(n[1] for n in _notes_with_words(doc)) + 1.0
     target = metadata(doc, 0.0, dur)
     pmeta = metadata(doc, p0, p1)[:1]
@@ -191,19 +231,34 @@ def render(doc, ref_wav: Path, prompt: tuple[float, float] | None = None) -> np.
                 "    for s in d: s['phoneme']=' '.join(g(s['text'].split(),'English'))\n"
                 "    json.dump(d,open(p,'w'))\n")
         (tmp / "fill.py").write_text(fill)
+        run_py = ("import runpy,sys,random; import numpy, torch\n"
+                  "s=int(sys.argv.pop(1))\n"
+                  "if s>=0: random.seed(s); numpy.random.seed(s); torch.manual_seed(s)\n"
+                  "runpy.run_module('cli.inference', run_name='__main__')\n")
+        (tmp / "run.py").write_text(run_py)
+        conf = "soulxsinger/config/soulxsinger.yaml"
+        edit = ""
+        if n_steps is not None or cfg is not None:
+            subs = []
+            if n_steps is not None:
+                subs.append(f"-e 's/^\\( *n_steps:\\).*/\\1 {int(n_steps)}/'")
+            if cfg is not None:
+                subs.append(f"-e 's/^\\( *cfg:\\).*/\\1 {float(cfg)}/'")
+            edit = f"sed {' '.join(subs)} {conf} > ~/{job}/config.yaml && "
+            conf = f"~/{job}/config.yaml"
         remote = (f"cd {REMOTE_DIR} && export LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH "
-                  f"PYTHONPATH=$PWD && .venv/bin/python ~/{job}/fill.py ~/{job}/target.json ~/{job}/prompt.json && "
-                  f".venv/bin/python -m cli.inference --device cuda "
+                  f"PYTHONPATH=$PWD && {edit}.venv/bin/python ~/{job}/fill.py ~/{job}/target.json ~/{job}/prompt.json && "
+                  f".venv/bin/python ~/{job}/run.py {-1 if seed is None else int(seed)} --device cuda "
                   f"--model_path pretrained_models/SoulX-Singer/model.pt "
-                  f"--config soulxsinger/config/soulxsinger.yaml "
+                  f"--config {conf} "
                   f"--prompt_wav_path ~/{job}/prompt.wav --prompt_metadata_path ~/{job}/prompt.json "
                   f"--target_metadata_path ~/{job}/target.json "
                   f"--phoneset_path soulxsinger/utils/phoneme/phone_set.json "
-                  f"--save_dir ~/{job}/out --auto_shift --pitch_shift 0 --control melody")
+                  f"--save_dir ~/{job}/out --auto_shift --pitch_shift 0 --control {control or CONTROL}")
         out = tmp / "generated.wav"
         try:
             run([*ssh, f"mkdir -p {job}"], "mkdir")
-            run([*scp, *(str(tmp / f) for f in ("target.json", "prompt.json", "prompt.wav", "fill.py")),
+            run([*scp, *(str(tmp / f) for f in ("target.json", "prompt.json", "prompt.wav", "fill.py", "run.py")),
                  f"{host}:{job}/"], "upload")
             run([*ssh, remote], "inference", timeout=1800)
             run([*scp, f"{host}:{job}/out/generated.wav", str(out)], "download")

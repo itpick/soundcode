@@ -63,6 +63,9 @@ def sing(doc, ref: Path | None = None, cache: Path = Path("out/sing"),
     ref = voice_ref(doc, ref)
     settings = {"steps": steps, "bank": diffsinger.BANK, "mode": "01CORE", "durations": durations,
                 "singer": singer}
+    if singer == "soulx":
+        from . import soulx
+        settings["soulx"] = soulx.settings()
     out = Path(cache) / f"{cache_key(doc, ref, settings)}.wav"
     # SoulX only needs the score's warnings; the bank's duration model is DiffSinger's
     score = ss.build(doc, durations="heuristic" if singer == "soulx" else durations)
