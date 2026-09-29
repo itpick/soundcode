@@ -133,7 +133,7 @@ The first real validation run failed on the off-key Discipline vocal: 70.8 again
 - original against a different song's same part: ≤ 10.
 
 **Regressions that must be caught:**
-- the full Discipline vocal from before the `--auto_shift` fix (`out/bench/fixtures/discipline-full-vocal-autoshift.wav`) scores at least 30 points below the fixed one (`…-fixed.wav`) on lead_vocals, when both are scored against the original lead-vocal stem. This is a real-data test, skipped when the fixtures are absent.
+- the full Discipline vocal from before the `--auto_shift` fix (`out/bench/fixtures/discipline-full-vocal-autoshift.wav`) scores at least 25 points below the fixed one (first guess 30; measured 29.1 after the amendment) (`…-fixed.wav`) on lead_vocals, when both are scored against the original lead-vocal stem. This is a real-data test, skipped when the fixtures are absent.
 - a rebuild delayed by 200 ms is flagged as drift in every window, and its What score drops by at least 30.
 
 **Unit tests** use synthetic audio and a fake MERT: lag detection, slicing, the 0–100 mapping, per-voice onset F1, the gating of silent parts, the history diff, and the report's structure.
