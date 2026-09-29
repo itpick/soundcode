@@ -1,23 +1,23 @@
 {
   "bass": {
-    "chroma": {"floor": 0.7735821008682251, "ceiling": 0.999076783657074, "weight": 1, "axis": "what"},
-    "env_corr": {"floor": 0.12740623911804327, "ceiling": 0.9852741801947738, "weight": 1, "axis": "dyn"},
-    "f0_cents": {"floor": 100, "ceiling": 10, "weight": 3, "axis": "what", "floor_cap": 100, "floor_measured": 300},
-    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 738.3219954648525},
-    "level_diff_db_abs": {"floor": 21.290042608415913, "ceiling": 0.19922077409353278, "weight": 0.1, "axis": "dyn"},
-    "logspec_db": {"floor": 7.798762166079189, "ceiling": 0.46670404327004517, "weight": 1, "axis": "sound"},
-    "mert": {"floor": 0.7925771176815033, "ceiling": 0.9969334304332733, "weight": 1, "axis": "sound"},
-    "onset_f1": {"floor": 0.4661016949152542, "ceiling": 0.8299034995930705, "weight": 1, "axis": "what"},
-    "spectral_db": {"floor": 9.818516004767819, "ceiling": 0.38603877715012974, "weight": 0.1, "axis": "sound"}
+    "chroma": {"floor": 0.6720280051231384, "ceiling": 0.9997987747192383, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": -0.014286106082542667, "ceiling": 0.99668527856808, "weight": 1, "axis": "dyn"},
+    "f0_cents": {"floor": 100, "ceiling": 0.15415839850902557, "weight": 3, "axis": "what", "floor_cap": 100, "floor_measured": 1102.78271484375},
+    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 299.31972789115645},
+    "level_diff_db_abs": {"floor": 9.753945226628709, "ceiling": 0.03567789272367605, "weight": 0.1, "axis": "dyn"},
+    "logspec_db": {"floor": 7.077660183232904, "ceiling": 0.4172100265554574, "weight": 1, "axis": "sound"},
+    "mert": {"floor": 0.8739909529685974, "ceiling": 0.9974415898323059, "weight": 1, "axis": "sound"},
+    "onset_f1": {"floor": 0.5875370919881305, "ceiling": 0.8542713567839196, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 9.818516004767819, "ceiling": 1.4026604531145463, "weight": 0.1, "axis": "sound"}
   },
   "drums": {
-    "decay_ratio_err": {"floor": 0.42541665191688205, "ceiling": 0.050909202292313174, "weight": 1, "axis": "sound"},
-    "drum_voice_f1": {"floor": 0.09725843074594233, "ceiling": 0.9748425771909959, "weight": 1, "axis": "what"},
-    "env_corr": {"floor": -0.059901846491483654, "ceiling": 0.9997179772557083, "weight": 1, "axis": "dyn"},
-    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 678.4580498866212},
-    "mert": {"floor": 0.8841835260391235, "ceiling": 0.9999551773071289, "weight": 1, "axis": "sound"},
-    "onset_f1": {"floor": 0.4827586206896552, "ceiling": 0.9929577464788732, "weight": 1, "axis": "what"},
-    "spectral_db": {"floor": 4.007921557853116, "ceiling": 0.041477851597161886, "weight": 0.1, "axis": "sound"}
+    "decay_ratio_err": {"floor": 0.42541665191688205, "ceiling": 0.04653787646367026, "weight": 1, "axis": "sound"},
+    "drum_voice_f1": {"floor": 0.09725843074594233, "ceiling": 0.9727470078940668, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": -0.059901846491483654, "ceiling": 0.9998382321709285, "weight": 1, "axis": "dyn"},
+    "lag_ms_abs": {"floor": 69.84126984126985, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100},
+    "mert": {"floor": 0.8841835260391235, "ceiling": 0.9999689161777496, "weight": 1, "axis": "sound"},
+    "onset_f1": {"floor": 0.4827586206896552, "ceiling": 0.9976303317535545, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 4.007921557853116, "ceiling": 0.029754964384919536, "weight": 0.1, "axis": "sound"}
   },
   "mix": {
     "chroma": {"floor": 0.5, "ceiling": 0.98, "weight": 1, "axis": "what"},
@@ -30,20 +30,20 @@
     "width_diff": {"floor": 0.5, "ceiling": 0.02, "weight": 1, "axis": "sound"}
   },
   "pitched": {
-    "chroma": {"floor": 0.8758118748664856, "ceiling": 0.9997322857379913, "weight": 1, "axis": "what"},
-    "env_corr": {"floor": 0.05221177870469225, "ceiling": 0.9609070342764469, "weight": 1, "axis": "dyn"},
-    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 855.5555555555555},
-    "level_diff_db_abs": {"floor": 10.232577840413066, "ceiling": 0.42003190993894357, "weight": 0.1, "axis": "dyn"},
-    "logspec_db": {"floor": 7.112918881587089, "ceiling": 0.4808705049554425, "weight": 1, "axis": "sound"},
-    "mert": {"floor": 0.7288308143615723, "ceiling": 0.9957681596279144, "weight": 1, "axis": "sound"},
-    "note_f1": {"floor": 0.032131611078979494, "ceiling": 0.7700029967036259, "weight": 1, "axis": "what"},
-    "onset_f1": {"floor": 0.13030560271646857, "ceiling": 0.8503852080123266, "weight": 1, "axis": "what"},
-    "spectral_db": {"floor": 8.070430452681624, "ceiling": 0.8119190605848543, "weight": 0.1, "axis": "sound"}
+    "chroma": {"floor": 0.878951907157898, "ceiling": 0.9996792078018188, "weight": 1, "axis": "what"},
+    "env_corr": {"floor": 0.06973455683936203, "ceiling": 0.9865056913910415, "weight": 1, "axis": "dyn"},
+    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 214.5124716553288},
+    "level_diff_db_abs": {"floor": 8.936266817749122, "ceiling": 0.07528672582163409, "weight": 0.1, "axis": "dyn"},
+    "logspec_db": {"floor": 6.946584962000763, "ceiling": 0.4254414572241884, "weight": 1, "axis": "sound"},
+    "mert": {"floor": 0.7256429195404053, "ceiling": 0.9968022704124451, "weight": 1, "axis": "sound"},
+    "note_f1": {"floor": 0.03007518796992481, "ceiling": 0.8666666666666666, "weight": 1, "axis": "what"},
+    "onset_f1": {"floor": 0.1518987341772152, "ceiling": 0.8521739130434783, "weight": 1, "axis": "what"},
+    "spectral_db": {"floor": 7.859901353556316, "ceiling": 1.3664920147017419, "weight": 0.1, "axis": "sound"}
   },
   "vocal": {
     "env_corr": {"floor": -0.05123157057561975, "ceiling": 1.0, "weight": 1, "axis": "dyn"},
-    "f0_cents": {"floor": 100, "ceiling": 0.0, "weight": 3, "axis": "what", "floor_cap": 100, "floor_measured": 747.2572326660156},
-    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 758.2766439909296},
+    "f0_cents": {"floor": 100, "ceiling": 0.0, "weight": 3, "axis": "what", "floor_cap": 100, "floor_measured": 743.5967102050781},
+    "lag_ms_abs": {"floor": 100, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100, "floor_measured": 244.44444444444446},
     "level_diff_db_abs": {"floor": 9.56417225845599, "ceiling": 0.0, "weight": 0.1, "axis": "dyn"},
     "mert": {"floor": 0.8827174305915833, "ceiling": 1.0, "weight": 1, "axis": "sound"},
     "spectral_db": {"floor": 17.866181691058458, "ceiling": 0.0, "weight": 0.1, "axis": "sound"},
