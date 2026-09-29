@@ -1,8 +1,8 @@
 # Demo site
 
-This is the demo page for sound-to-code: it plays each original clip next to the rebuild made
-from its `.sc` code, and shows how small that code is. It is **not deployed** — everything here
-lives only in this repo, viewed locally.
+This is the demo page for sound-to-code. It plays each original clip next to the rebuild made from its `.sc` code, and shows how small that code is.
+
+**Deployed** with GitHub Pages at https://itpick.github.io/soundcode/ by `.github/workflows/pages.yml`, which publishes only this `site/` folder on every push to `main` that changes it. The repo and the page are public. Search engines are asked not to index the page (`robots.txt`); delete that file to allow indexing.
 
 ## Build
 
@@ -29,9 +29,9 @@ python -m http.server -d site
 Then open the printed URL. Opening `index.html` directly (`file://`) will not work — the page
 fetches `data.json`, which browsers block for local files without a server.
 
-## Deploy later: private and free (Cloudflare Pages + Cloudflare Access)
+## Alternative: private and free (Cloudflare Pages + Cloudflare Access)
 
-Not deployed yet. GitHub can't do this for free: access-controlled Pages needs GitHub Enterprise Cloud with an organization, and on every other plan a Pages site is public even from a private repo. The free route is Cloudflare. Pages hosts the site, and Access (free for up to 50 users) puts a login in front of it.
+Use this instead of GitHub Pages if the page should be private. GitHub can't do that for free: access-controlled Pages needs GitHub Enterprise Cloud with an organization, and on every other plan a Pages site is public even from a private repo. The free route is Cloudflare. Pages hosts the site, and Access (free for up to 50 users) puts a login in front of it.
 
 1. **Create the Pages project.**
    - Make a free Cloudflare account.
