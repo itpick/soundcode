@@ -424,3 +424,43 @@ def test_cover_tolerance_note_f1_forgives_60ms_and_60_cents():
 - [ ] **Step 4:** Run `soundcode bench --tier C --label baseline` (Discipline full, about 1 hour cold). Commit the history and README.
 - [ ] **Step 5 (user checkpoint):** open the full-Discipline `report.html` for the user, and play the three worst-slice listen pairs.
 - [ ] **Step 6: Commit:** `git commit -m "score: calibrated anchors, real validation tests, tier A and C baselines"`
+
+---
+
+## Outcome (2026-09-29)
+
+**Done:**
+- Tasks 1–7.
+- Three spec amendments, all from real data:
+  1. perceptual floor caps, pitch weight 3, geometric axis combination;
+  2. the activity gate (10% of frames);
+  3. nearest-peak lag with a median song value, bass pitch from 32.7 Hz, the mix gain offset at low weight plus section dynamics, the worst spot = the worst scored slice.
+- Fixes found by the real runs:
+  - the encode temp-dir leak that filled the disk;
+  - exFAT AppleDouble files;
+  - a failed stem sum check is now a warning, not a crash.
+- 414 unit tests pass, and all 6 real checks (`-m real`) pass.
+
+**Baselines** are in `docs/results/benchmark/`:
+- Tier A (30 s clips): River 81, Discipline 81, Lights 78, Corona 55, 999,999 43.
+- Tier C (full songs): Discipline 84, Lights 80, River 75, Corona 50.
+
+**Follow-ups:**
+- **Mix calibration.** The mix is still on hand-set anchors. Floor: clip a vs clip b. Ceiling: the clip vs the sum of its second separation's stems.
+- **Silence basic-pitch's debug prints.** Its CoreML path prints isfinite/shape/dtype for every chunk; redirect stdout in `metrics._notes`.
+- **Guitar lag bias toward 0.** On the guitar, a 20 ms delay reads 0 and a 200 ms delay reads 180, which points at the envelope, not the lag rule.
+- **Tier B** (60–100 s excerpts) has not been run yet.
+- **Ear ledger and blind A/B**, to validate and refit the weights. This is its own spec.
+- **Corpus** of research datasets and your own songs. This is its own spec.
+
+**Deferred minors:**
+- `active()` uses non-overlapping 100 ms frames.
+- `align` imports the private `slices._mono`.
+- `compare.energy_corr` has the float32 NaN gap that `_env_corr` fixed.
+- `decay_s` is only covered indirectly by the liveness test.
+- The cache-key test covers the model id but not the transformers-version half.
+- `sung_wer` on backing vocals, scored against the lead lyrics, carries little signal.
+- Extra sound in the rebuild where the original is silent is not scored.
+- The song-level raw MERT value for a truncated rebuild pools the real, shorter file.
+- The mix `lag_ms_abs` `floor_measured` was set by hand.
+- History keys `label@m:ss` could collide within one second.
