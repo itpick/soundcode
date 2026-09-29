@@ -76,6 +76,9 @@ TIERS: dict[str, list[dict]] = {
 HISTORY_PATH = Path("docs") / "results" / "benchmark" / "history.jsonl"
 README_PATH = Path("docs") / "results" / "benchmark" / "README.md"
 
+# Amendment 3: said in `bench --help` and the README header
+CACHE_NOTE = "stages are cached by input mtime; after changing encode/render code run with --force"
+
 
 # --------------------------------------------------------------------------
 # prepare: cut -> separate -> encode -> render, cached by mtime per stage
@@ -240,15 +243,21 @@ def _git_commit(root: Path, run) -> str:
 
 
 def _part_history(res: dict) -> dict:
+    """A part's scores for the history line. Sections are keyed `label@m:ss`
+    (their start), so two sections sharing a label ("verse") stay apart."""
     song = res.get("song")
     axes = (song or {}).get("axes") or {}
     return {"score": song.get("score") if song else None,
             "what": axes.get("what"), "sound": axes.get("sound"), "dyn": axes.get("dyn"),
-            "sections": {s["label"]: s["score"] for s in res.get("sections", [])}}
+            "sections": {f"{s['label']}@{report._mmss(s.get('a'))}": s["score"]
+                         for s in res.get("sections", [])}}
 
 
 def _song_history(result: dict) -> dict:
+    """A song's scores for the history line: its score, its worst *scored*
+    slice, the parts never rebuilt (`missing`), and every part's scores."""
     return {"score": result.get("score"), "worst": result.get("worst"),
+            "missing": list(result.get("missing") or []),
             "parts": {k: _part_history(v) for k, v in result.get("parts", {}).items()}}
 
 
@@ -258,26 +267,28 @@ def _read_history(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def diff(prev_line: dict | None, cur_line: dict) -> list[tuple[str, str, float, float]]:
-    """`(song, part, before, after)` for every song/part present with a
-    non-None score in both lines. `part` is `"song"` for the overall song
-    score. `prev_line=None` (no earlier run of this tier): empty."""
+def diff(prev_line: dict | None, cur_line: dict) -> list[tuple[str, str, float | None, float | None]]:
+    """`(song, part, before, after)` for every song/part present in both
+    lines with a score on at least one side. `part` is `"song"` for the
+    overall song score. A None side is a state transition (e.g. scored ->
+    silent, `37 → —`), not a delta. `prev_line=None` (no earlier run of
+    this tier): empty."""
     if not prev_line:
         return []
-    out: list[tuple[str, str, float, float]] = []
+    out: list[tuple[str, str, float | None, float | None]] = []
     prev_songs, cur_songs = prev_line.get("songs", {}), cur_line.get("songs", {})
     for name, cur in cur_songs.items():
         prev = prev_songs.get(name)
         if prev is None:
             continue
-        if cur.get("score") is not None and prev.get("score") is not None:
-            out.append((name, "song", prev["score"], cur["score"]))
+        if cur.get("score") is not None or prev.get("score") is not None:
+            out.append((name, "song", prev.get("score"), cur.get("score")))
         for part, cp in cur.get("parts", {}).items():
             pp = (prev.get("parts") or {}).get(part)
             if pp is None:
                 continue
-            if cp.get("score") is not None and pp.get("score") is not None:
-                out.append((name, part, pp["score"], cp["score"]))
+            if cp.get("score") is not None or pp.get("score") is not None:
+                out.append((name, part, pp.get("score"), cp.get("score")))
     return out
 
 
@@ -286,10 +297,21 @@ def _fmt(v) -> str:
 
 
 def _fmt_delta(before, after) -> str:
+    """` (+13)`; the sign comes from the rounded delta, so -0.3 is `(+0)`,
+    never `(-0)`. Empty when either side is None."""
     if before is None or after is None:
         return ""
-    d = after - before
-    return f" ({'+' if d >= 0 else ''}{d:.0f})"
+    d = round(after - before) + 0          # + 0 turns -0 into 0
+    return f" ({d:+d})"
+
+
+def _fmt_change(before, after) -> str:
+    """`71 → 84 (+13)`, or a bare state transition such as `37 → —`."""
+    return f"{_fmt(before)} → {_fmt(after)}{_fmt_delta(before, after)}"
+
+
+def _is_delta(change) -> bool:
+    return change[2] is not None and change[3] is not None
 
 
 def _latest_per_tier(lines: list[dict]) -> tuple[dict, dict]:
@@ -309,7 +331,8 @@ def _render_readme(lines: list[dict]) -> str:
     latest, prev = _latest_per_tier(lines)
     out = ["# Benchmark results", "",
            "Regenerated after every `soundcode bench` run "
-           "(spec 2026-09-28-benchmark-scorer). No raw audio, no lyrics.", ""]
+           "(spec 2026-09-28-benchmark-scorer). No raw audio, no lyrics.", "",
+           f"Note: {CACHE_NOTE}.", ""]
     for tier in sorted(latest):
         cur = latest[tier]
         pv = prev.get(tier)
@@ -320,24 +343,31 @@ def _render_readme(lines: list[dict]) -> str:
         out.append("")
         out.append("| song | part | what | sound | dyn | score | change |")
         out.append("|---|---|---|---|---|---|---|")
+        def change(key):
+            if key not in deltas:
+                return ""
+            b, a = deltas[key]
+            return f" {_fmt_change(b, a)}" if b is None or a is None else _fmt_delta(b, a)
+
         for name, song in cur.get("songs", {}).items():
-            b, a = deltas.get((name, "song"), (None, None))
-            out.append(f"| {name} | **song** | | | | {_fmt(song.get('score'))} |{_fmt_delta(b, a)} |")
+            missing = song.get("missing") or []
+            label = "**song**" + (f" (missing: {', '.join(missing)})" if missing else "")
+            out.append(f"| {name} | {label} | | | | {_fmt(song.get('score'))} |{change((name, 'song'))} |")
             for part, pd in song.get("parts", {}).items():
-                b, a = deltas.get((name, part), (None, None))
                 out.append(f"| {name} | {part} | {_fmt(pd.get('what'))} | {_fmt(pd.get('sound'))} | "
-                           f"{_fmt(pd.get('dyn'))} | {_fmt(pd.get('score'))} |{_fmt_delta(b, a)} |")
+                           f"{_fmt(pd.get('dyn'))} | {_fmt(pd.get('score'))} |{change((name, part))} |")
         out.append("")
         # largest gain / worst regression first: sort by delta (after - before),
         # descending for improvements, ascending (most negative first) for regressions
-        improved = sorted((c for c in changes if c[3] - c[2] >= 5), key=lambda c: c[2] - c[3])
-        regressed = sorted((c for c in changes if c[3] - c[2] <= -5), key=lambda c: c[3] - c[2])
+        scored = [c for c in changes if _is_delta(c)]
+        improved = sorted((c for c in scored if c[3] - c[2] >= 5), key=lambda c: c[2] - c[3])
+        regressed = sorted((c for c in scored if c[3] - c[2] <= -5), key=lambda c: c[3] - c[2])
         out.append("### Improved (≥ +5)")
-        out += ([f"- {s} {p}: {b:.0f} → {a:.0f} ({a - b:+.0f})" for s, p, b, a in improved]
+        out += ([f"- {s} {p}: {_fmt_change(b, a)}" for s, p, b, a in improved]
                if improved else ["_none_"])
         out.append("")
         out.append("### Regressed (≤ −5)")
-        out += ([f"- {s} {p}: {b:.0f} → {a:.0f} ({a - b:+.0f})" for s, p, b, a in regressed]
+        out += ([f"- {s} {p}: {_fmt_change(b, a)}" for s, p, b, a in regressed]
                if regressed else ["_none_"])
         out.append("")
     return "\n".join(out) + "\n"
@@ -387,7 +417,7 @@ def run_bench(tier: str, label: str, root: Path, force: bool = False, run=subpro
         if changes:
             print(f"tier {t}: change from the previous run of this tier")
             for name, part, before, after in changes:
-                print(f"  {name} {part} {before:.0f} → {after:.0f} ({after - before:+.0f})")
+                print(f"  {name} {part} {_fmt_change(before, after)}")
         new_lines.append(line)
 
     # only after every song in every requested tier has scored: commit the run
@@ -497,16 +527,19 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
 
     When `old` carries a `floor_cap` (a perceptual ceiling on how loose a
     lower-is-better metric's floor may be -- design doc amendment,
-    2026-09-28), the floor actually written is never looser than that cap,
-    even though the spread/direction guards above are checked against the
-    floor as measured."""
+    2026-09-28), the floor written is `min(measured, cap)`, and the measured
+    value is kept beside it as `floor_measured` whenever the cap applies
+    (dropped when it doesn't). The degenerate guard compares the *capped*
+    spreads on both sides -- the spreads `to_score` actually maps over; the
+    direction guard uses the floor as measured."""
     label = f"{part_type}.{metric}"
     if ceiling is None or floor is None:
         warnings.append(f"{label}: not enough data to measure (ceiling={ceiling}, floor={floor}) "
                         f"-- keeping floor={old['floor']}, ceiling={old['ceiling']}")
         return dict(old)
-    old_spread = abs(old["ceiling"] - old["floor"])
-    new_spread = abs(ceiling - floor)
+    cap = old.get("floor_cap")
+    old_spread = abs(old["ceiling"] - _capped_floor(old["floor"], old["ceiling"], cap))
+    new_spread = abs(ceiling - _capped_floor(floor, ceiling, cap))
     if new_spread < _MIN_ANCHOR_SPREAD_FRAC * old_spread:
         warnings.append(f"{label}: degenerate, ceiling≈floor≈{ceiling:.4g} (spread {new_spread:.4g} "
                         f"< {_MIN_ANCHOR_SPREAD_FRAC:.0%} of the existing {old_spread:.4g}) "
@@ -517,13 +550,22 @@ def _update_anchor(part_type: str, metric: str, old: dict, ceiling: float | None
         warnings.append(f"{label}: direction flipped (was {old['floor']:g} -> {old['ceiling']:g}, "
                         f"measured {floor:g} -> {ceiling:g}) -- keeping the existing anchor")
         return dict(old)
-    cap = old.get("floor_cap")
     direction = old_dir or new_dir
+    new = {**old, "ceiling": ceiling}
+    new.pop("floor_measured", None)
     if cap is not None and direction < 0 and floor > cap:
         warnings.append(f"{label}: measured floor {floor:g} looser than its perceptual cap "
                         f"{cap:g} -- capping")
-        floor = cap
-    return {**old, "floor": floor, "ceiling": ceiling}
+        new["floor"], new["floor_measured"] = cap, floor
+    else:
+        new["floor"] = floor
+    return new
+
+
+def _capped_floor(floor: float, ceiling: float, cap) -> float:
+    """The floor `anchors.to_score` actually uses: `min(floor, cap)` for a
+    lower-is-better metric (`floor > ceiling`) with a `floor_cap`."""
+    return min(floor, cap) if cap is not None and floor > ceiling else floor
 
 
 _ANCHOR_KEYS = ("floor", "ceiling", "weight", "axis")

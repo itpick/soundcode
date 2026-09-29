@@ -264,3 +264,101 @@ def test_click_only_original_section_is_silent_not_missing(tmp_path, fakes):
 def test_json_default_turns_numpy_nan_into_null(tmp_path):
     assert json.loads(json.dumps({"x": np.float32("nan"), "y": np.float32(1.5)},
                                  default=scorer._json_default)) == {"x": None, "y": 1.5}
+
+
+def test_song_lag_is_the_median_of_the_window_lags(monkeypatch):
+    """Amendment 3: the song-level lag is the median |window lag| over the
+    windows where both sides are active, so a few beat-multiple outliers
+    can't drag it (Discipline drums: median 10 ms, mean 144 ms)."""
+    from soundcode.score import align, slices
+    wins = [slices.Slice("window", f"w{i}", 10.0 * i, 10.0 * i + 20.0) for i in range(6)]
+    lags = [10.0, -10.0, 987.0, -1227.0, 12.0, 500.0]
+
+    def fake_drift(y_ref, y_est, sr, spans):
+        return [{"label": s.label, "a": s.a, "b": s.b, "lag_ms": lag,
+                 "drift": abs(lag) > 30} for s, lag in zip(spans, lags)]
+    monkeypatch.setattr(align, "drift", fake_drift)
+    states = {"sections": [], "windows": ["ok"] * 5 + ["missing"]}
+    win_dr, _sec, song_lag, missing = scorer._lags(None, None, SR, [], wins, states)
+    assert song_lag == pytest.approx(12.0)            # median of 10, 10, 12, 987, 1227 (mean 449)
+    assert missing == ["w5"]
+    assert [d["drift"] for d in win_dr] == [False, False, True, True, False, False]
+
+
+def test_song_slice_stores_the_median_lag_as_lag_ms_abs_median(tmp_path, fakes):
+    res = _song(tmp_path, {"piano": _piano()}, {"piano": _piano(shift=0.2)})
+    raw = res["parts"]["piano"]["song"]["raw"]
+    assert "lag_ms" not in raw
+    assert raw["lag_ms_abs_median"] == pytest.approx(200, abs=15)
+    assert raw["lag_ms_abs"] == raw["lag_ms_abs_median"]
+    assert "lag_ms" not in res["mix"]["song"]["raw"]
+    assert res["parts"]["piano"]["sections"][0]["raw"]["lag_ms"] == pytest.approx(200, abs=15)
+
+
+# --- Amendment 3: mix section dynamics -------------------------------------
+
+_ARC = ((0.0, 12.0, 0.1), (12.0, 26.0, 0.4), (26.0, 40.0, 1.0))   # intro/verse/chorus gains
+
+
+def _arc(y, gains=_ARC):
+    out = y.copy()
+    for a, b, g in gains:
+        out[int(a * SR):int(b * SR)] *= g
+    return out
+
+
+def _mix_song(tmp_path, orig_mix, reb_mix):
+    base = _piano() + _drums()
+    stems_dir, parts_dir = tmp_path / "stems", tmp_path / "parts"
+    _write(stems_dir / "piano.wav", base)
+    _write(parts_dir / "piano.wav", base)
+    _write(tmp_path / "song.wav", np.stack([orig_mix, 0.8 * orig_mix], 1))
+    _write(tmp_path / "rebuild.wav", np.stack([reb_mix, 0.8 * reb_mix], 1))
+    (tmp_path / "song.sc").write_text(SC)
+    return scorer.score_song(tmp_path / "song.wav", stems_dir, tmp_path / "song.sc",
+                             parts_dir, tmp_path / "rebuild.wav", tmp_path / "out")
+
+
+def test_mix_gain_offset_alone_keeps_dyn_high(tmp_path, fakes):
+    orig = _arc(_piano() + _drums())
+    res = _mix_song(tmp_path, orig, orig * 10 ** (-10 / 20))      # the original at -10 dB
+    mix = res["mix"]["song"]
+    assert mix["raw"]["lufs_diff_abs"] == pytest.approx(10.0, abs=0.3)
+    assert mix["raw"]["lufs_section_diff"] == pytest.approx(0.0, abs=0.3)
+    assert mix["axes"]["dyn"] >= 90
+    for sec in res["mix"]["sections"]:
+        assert sec["raw"]["lufs_section_diff"] == pytest.approx(0.0, abs=0.3)
+
+
+def test_mix_with_a_flattened_dynamic_arc_scores_lower_dyn(tmp_path, fakes):
+    base = _piano() + _drums()
+    orig = _arc(base)
+    quiet = _mix_song(tmp_path / "quiet", orig, orig * 10 ** (-10 / 20))
+    flat = _mix_song(tmp_path / "flat", orig, base * 0.4)             # compressed: no arc
+    raw = flat["mix"]["song"]["raw"]
+    assert raw["lufs_section_diff"] > 3.0
+    assert flat["mix"]["song"]["axes"]["dyn"] < quiet["mix"]["song"]["axes"]["dyn"] - 30
+
+
+# --- Amendment 3: the song's worst is its worst *scored* slice --------------
+
+def test_song_worst_is_the_worst_scored_slice_and_missing_parts_are_listed(tmp_path, fakes):
+    res = _song(tmp_path,
+                {"piano": _piano(), "guitar": _piano(), "bass": np.zeros(N, np.float32)},
+                {"piano": _piano(shift=0.2)})
+    assert res["missing"] == ["guitar"]                       # never rebuilt
+    w = res["worst"]
+    assert w["part"] == "piano" and w["label"] != "not rebuilt"
+    ranked = report.worst_slices(res, n=100)
+    assert (w["part"], w["label"], w["a"], w["score"]) == \
+        (ranked[0]["part"], ranked[0]["label"], ranked[0]["a"], ranked[0]["score"])
+    song_row = [ln for ln in report.table(res).splitlines() if ln.split("|")[0].strip() == "song"][-1]
+    assert "piano" in song_row and "missing: guitar" in song_row
+    assert json.loads((tmp_path / "out" / "scores.json").read_text())["missing"] == ["guitar"]
+
+
+def test_song_worst_is_none_when_nothing_is_scored(tmp_path, fakes):
+    res = _song(tmp_path, {"piano": _piano()}, {})
+    assert res["worst"] is None and res["missing"] == ["piano"]
+    song_row = [ln for ln in report.table(res).splitlines() if ln.split("|")[0].strip() == "song"][-1]
+    assert "missing: piano" in song_row

@@ -101,8 +101,17 @@ EXPECTED_METRIC_NAMES = {
               "env_corr", "level_diff_db_abs"},
     "mix": {"chroma", "onset_f1", "lag_ms_abs",
             "mert", "width_diff", "spectral_db",
-            "lufs_diff_abs"},
+            "lufs_diff_abs", "lufs_section_diff"},
 }
+
+
+def test_mix_loudness_anchors_follow_amendment_3():
+    """The whole-song LUFS difference is a self-optimised gain offset (low
+    weight); the dynamic arc once that offset is removed carries Dyn."""
+    assert anchors.ANCHORS["mix"]["lufs_diff_abs"]["weight"] == 0.1
+    assert anchors.ANCHORS["mix"]["lufs_diff_abs"]["axis"] == "dyn"
+    assert anchors.ANCHORS["mix"]["lufs_section_diff"] == {
+        "floor": 6, "ceiling": 0.5, "weight": 1, "axis": "dyn"}
 
 
 def test_anchors_json_metric_names_match_the_spec_table_exactly():

@@ -51,7 +51,23 @@ TARGET_SR = 24000
 CHUNK_S = 30.0
 CONTEXT_S = 1.0          # overlap kept (then discarded) on each side of an internal chunk boundary
 FRAME_RATE = 75.0
+MERT_STRIDE = 320        # samples per MERT frame at 24 kHz (24000 / 75)
 CACHE_DIR = Path("out/bench/cache")
+
+
+def _check_stride(chunk_s: float, context_s: float) -> None:
+    """Chunk and context lengths must be whole MERT frames (320-sample
+    stride at 24 kHz), or the stitched frames drift off `i / FRAME_RATE`
+    at every chunk boundary. Checked at import (a raise, not an `assert`,
+    so `python -O` keeps it)."""
+    for name, s in (("CHUNK_S", chunk_s), ("CONTEXT_S", context_s)):
+        n = s * TARGET_SR
+        if abs(n - round(n)) > 1e-6 or round(n) % MERT_STRIDE:
+            raise ValueError(f"{name}={s} s is {n:g} samples at {TARGET_SR} Hz: not a multiple "
+                             f"of MERT's {MERT_STRIDE}-sample stride")
+
+
+_check_stride(CHUNK_S, CONTEXT_S)
 
 _MODEL = None
 _EXTRACTOR = None

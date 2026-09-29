@@ -98,8 +98,12 @@ def test_active_constants_match_the_amendment():
 
 
 def test_lag_and_drift():
+    # Amendment 3: the lag is the nearest correlation peak within 0.05 of the
+    # max, so on a strictly periodic train a delay is only recoverable when
+    # it is under half the period (a 0.37 s train delayed 200 ms reads as
+    # -170 ms, correctly by that rule). 0.49 s keeps 200 ms the nearest peak.
     sr = 16000
-    t = np.arange(0.5, 19.5, 0.37)
+    t = np.arange(0.5, 19.5, 0.49)
     ref = clicks(sr, t, sr * 20)
     late = clicks(sr, t + 0.2, sr * 20)
     assert align.lag_ms(ref, ref, sr, 0, 20) == pytest.approx(0, abs=10)
@@ -126,3 +130,93 @@ def test_drift_matches_per_window_lag_ms():
         expected = align.lag_ms(ref, late, sr, w.a, w.b)
         assert row["lag_ms"] == pytest.approx(expected, abs=15)
         assert row["lag_ms"] == pytest.approx(200, abs=15)
+
+
+# --- Amendment 3: nearest-peak lag, FFT cross-correlation --------------------
+
+def _brute_pearson(o_ref, o_est, max_lag):
+    """The pre-amendment Pearson loop, as a reference: {lag: corr} over every
+    lag with >= 2 overlapping frames of non-zero variance."""
+    m = min(o_ref.size, o_est.size)
+    o_ref, o_est = o_ref[:m], o_est[:m]
+    out = {}
+    for lag in range(-max_lag, max_lag + 1):
+        if lag >= 0:
+            r, e = o_ref[: m - lag], o_est[lag:]
+        else:
+            r, e = o_ref[-lag:], o_est[: m + lag]
+        if r.size < 2 or np.std(r) == 0.0 or np.std(e) == 0.0:
+            continue
+        out[lag] = float(np.corrcoef(r, e)[0, 1])
+    return out
+
+
+def _nearest_peak_reference(corr: dict, tol=0.05):
+    lags = sorted(corr)
+    best = max(corr.values())
+
+    def is_peak(lag):
+        c = corr[lag]
+        return all(corr.get(n, -np.inf) <= c for n in (lag - 1, lag + 1))
+    cands = [lag for lag in lags if corr[lag] >= best - tol and is_peak(lag)]
+    return min(cands, key=lambda lag: (abs(lag), -corr[lag]))
+
+
+def test_periodic_click_train_20ms_late_is_20_not_a_beat_multiple():
+    sr = 16000
+    t = np.arange(0.5, 19.5, 0.49)
+    ref = clicks(sr, t, sr * 20)
+    late = clicks(sr, t + 0.02, sr * 20)
+    assert align.lag_ms(ref, late, sr, 0, 20) == pytest.approx(20, abs=10)
+    d = align.drift(ref, late, sr, [slices.Slice("window", "0:00", 0.0, 20.0)])
+    assert d[0]["lag_ms"] == pytest.approx(20, abs=10)
+    assert not d[0]["drift"]          # 20 ms is under the 30 ms drift threshold
+
+
+def test_xcorr_matches_a_brute_force_pearson_loop():
+    rng = np.random.default_rng(11)
+    for _ in range(5):
+        o_ref = rng.random(600) ** 4
+        o_est = rng.random(600) ** 4
+        lags, corr = align._xcorr(o_ref, o_est, 150)
+        ref = _brute_pearson(o_ref, o_est, 150)
+        got = {int(lag): float(c) for lag, c in zip(lags, corr) if np.isfinite(c)}
+        assert set(got) == set(ref)
+        for lag, c in ref.items():
+            assert got[lag] == pytest.approx(c, abs=1e-6)
+
+
+def test_fft_lag_agrees_with_brute_force_on_random_envelopes_within_10ms():
+    rng = np.random.default_rng(5)
+    for shift in (-40, -7, 0, 3, 25, 90):
+        base = rng.random(900) ** 6
+        o_ref = base[100:700]
+        o_est = base[100 - shift:700 - shift]
+        got = align._search_lag(o_ref, o_est, 10.0, 150)
+        want = _nearest_peak_reference(_brute_pearson(o_ref, o_est, 150)) * 10.0
+        assert got == pytest.approx(want, abs=10)
+        assert got == pytest.approx(shift * 10.0, abs=10)
+
+
+def _curve(peaks: dict, max_lag=150):
+    """A correlation curve over -max_lag..max_lag: triangular peaks of the
+    given heights at the given lags on a 0 floor."""
+    lags = np.arange(-max_lag, max_lag + 1)
+    corr = np.zeros(lags.size)
+    for at, h in peaks.items():
+        corr = np.maximum(corr, h - 0.1 * np.abs(lags - at))
+    return lags, corr
+
+
+def test_search_lag_prefers_the_nearest_peak_within_0_05_of_the_max(monkeypatch):
+    assert align.LAG_PEAK_TOLERANCE == pytest.approx(0.05)
+    env = np.random.default_rng(0).random(400)
+    # a far peak (+120 frames) that wins by a hair (0.02) loses to the near one (+1)
+    monkeypatch.setattr(align, "_xcorr", lambda r, e, m: _curve({1: 0.96, 120: 0.98, -3: 0.90}))
+    assert align._search_lag(env, env, 10.0, 150) == pytest.approx(10.0)
+    # ... but not when the near peak is more than 0.05 below the max
+    monkeypatch.setattr(align, "_xcorr", lambda r, e, m: _curve({1: 0.92, 120: 0.98}))
+    assert align._search_lag(env, env, 10.0, 150) == pytest.approx(1200.0)
+    # a shoulder on the way up to a far peak is not a candidate, only peaks are
+    monkeypatch.setattr(align, "_xcorr", lambda r, e, m: _curve({40: 0.99}))
+    assert align._search_lag(env, env, 10.0, 150) == pytest.approx(400.0)

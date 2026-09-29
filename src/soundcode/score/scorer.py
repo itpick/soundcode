@@ -201,7 +201,8 @@ def song_score(parts: dict, energy: dict, mix) -> float | None:
 # --------------------------------------------------------------------------
 
 VOCAL_PARTS = ("lead_vocals", "backing_vocals")
-BASS_F0_FMIN = 30.0          # design doc: bass f0 via torchcrepe with fmin 30 Hz
+BASS_F0_FMIN = 32.7          # Amendment 3: C1, CREPE's lowest bin (30 Hz is below its
+                             # range and gave NaN for every bass frame)
 
 _WHISPER = None
 
@@ -277,6 +278,19 @@ def _abs(v):
 def _mean(vals):
     vals = [float(v) for v in vals if v is not None]
     return float(np.mean(vals)) if vals else None
+
+
+def _median(vals):
+    vals = [float(v) for v in vals if v is not None]
+    return float(np.median(vals)) if vals else None
+
+
+def _song_lag_keys(m: dict) -> dict:
+    """The song slice's lag is the median |window lag| (`_lags`), not a
+    signed lag: store it as `lag_ms_abs_median` (beside the anchored
+    `lag_ms_abs`, the same value) rather than as a misleading `lag_ms`."""
+    m["lag_ms_abs_median"] = _abs(m.pop("lag_ms", None))
+    return m
 
 
 def _word_pairs(ref_words, est_words) -> list[tuple[float, float]]:
@@ -405,9 +419,10 @@ def _assemble(part_type, song_s, secs, wins, song_m, sec_ms, win_ms, states) -> 
 def _lags(y_ref, y_est, sr, secs, wins, states):
     """Per-window drift, per-section lag, and the song lag.
 
-    The song lag is the mean |lag| over the windows where both sides are
-    active: the whole-song cross-correlation of a part that drifts
-    progressively has no one lag. A window where the original is active but
+    The song lag is the **median** |lag| over the windows where both sides
+    are active (Amendment 3): the whole-song cross-correlation of a part
+    that drifts progressively has no one lag, and a mean let a few
+    beat-multiple outlier windows swamp an otherwise in-sync part. A window where the original is active but
     the rebuild isn't is flagged `missing` in its drift entry (lag unknown,
     None, never "in sync"), and listed in `missing_windows` rather than
     silently dropped."""
@@ -419,8 +434,8 @@ def _lags(y_ref, y_est, sr, secs, wins, states):
         d["missing"] = st == "missing"
         if st == "missing":
             d["lag_ms"], d["drift"] = None, False
-    song_lag = _mean(abs(d["lag_ms"]) for d, st in zip(win_dr, states["windows"])
-                     if st == "ok" and d["lag_ms"] is not None)
+    song_lag = _median(abs(d["lag_ms"]) for d, st in zip(win_dr, states["windows"])
+                       if st == "ok" and d["lag_ms"] is not None)
     missing_windows = [d["label"] for d in win_dr if d["missing"]]
     return win_dr, [d["lag_ms"] for d in sec_dr], song_lag, missing_windows
 
@@ -523,7 +538,7 @@ def _score_part_audio(key: str, ref_path: Path, est_path: Path, y_ref, y_est, do
               for s, lag, st in zip(secs, sec_lags, states["sections"])]
     win_ms = [one(s, d["lag_ms"]) if st == "ok" else {}
               for s, d, st in zip(wins, win_dr, states["windows"])]
-    song_m = one(song_s, song_lag)
+    song_m = _song_lag_keys(one(song_s, song_lag))
     song_m["missing_windows"] = missing_windows
     if key in VOCAL_PARTS:
         song_m.update(_vocal_extras(f_ref, f_est, sr, doc, ref_path, est_path, w_ref, w_est))
@@ -589,8 +604,8 @@ def part_metrics(ref_path: Path, est_path: Path, key: str, *, doc=None,
         w_ref, w_est = _words(ref_path), _words(est_path)
         pairs = _word_pairs(w_ref, w_est)
 
-    m = _slice_metrics_full(f_ref, f_est, fr_ref, fr_est, song_s, key, sr, song_lag,
-                            vo_ref=vo_ref, vo_est=vo_est, pairs=pairs)
+    m = _song_lag_keys(_slice_metrics_full(f_ref, f_est, fr_ref, fr_est, song_s, key, sr,
+                                           song_lag, vo_ref=vo_ref, vo_est=vo_est, pairs=pairs))
     if key in VOCAL_PARTS:
         m.update(_vocal_extras(f_ref, f_est, sr, doc, ref_path, est_path, w_ref, w_est))
     return m
@@ -598,7 +613,15 @@ def part_metrics(ref_path: Path, est_path: Path, key: str, *, doc=None,
 
 def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[dict, list[dict]]:
     """The rebuilt mix against the original mix: chroma, onset F1, lag, MERT,
-    LUFS-I and stereo width differences, spectral distance."""
+    LUFS-I and stereo width differences, spectral distance.
+
+    Loudness (Amendment 3): the whole-song `lufs_diff_abs` is a gain offset
+    the renderer can self-optimise, so it carries little weight and is
+    reported raw. The Dyn axis rests on `lufs_section_diff`, the dynamic
+    arc: per slice, |slice LUFS difference - the whole-song LUFS difference|;
+    for the song, the mean of that over the sections pyloudnorm can measure
+    (too-short and silent sections are skipped; with no sections, the
+    windows)."""
     import soundfile as sf
 
     from .. import compare
@@ -621,6 +644,10 @@ def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[d
     states = _states(y_ref, y_est, sr, secs, wins)
     win_dr, sec_lags, song_lag, missing_windows = _lags(y_ref, y_est, sr, secs, wins, states)
 
+    lr_song = _lufs(_seg(st_ref, st_sr, song_s.a, song_s.b), st_sr)
+    le_song = _lufs(_seg(st_est, st_sr, song_s.a, song_s.b), st_sr)
+    song_offset = (le_song - lr_song) if lr_song is not None and le_song is not None else None
+
     def one(s, lag):
         m = metrics.slice_metrics(f_ref, f_est, s, "mix")
         m["lag_ms"], m["lag_ms_abs"] = lag, _abs(lag)
@@ -631,6 +658,8 @@ def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[d
         lr, le = _lufs(sr_, st_sr), _lufs(se_, st_sr)
         m["lufs_diff"] = (le - lr) if lr is not None and le is not None else None
         m["lufs_diff_abs"] = _abs(m["lufs_diff"])
+        m["lufs_section_diff"] = (abs(m["lufs_diff"] - song_offset)
+                                  if m["lufs_diff"] is not None and song_offset is not None else None)
         wr, we = _width(sr_), _width(se_)
         m["width_diff"] = abs(wr - we) if wr is not None and we is not None else None
         return m
@@ -639,9 +668,31 @@ def _score_mix(original: Path, rebuild_mix: Path, song_s, secs, wins) -> tuple[d
               for s, lag, st in zip(secs, sec_lags, states["sections"])]
     win_ms = [one(s, d["lag_ms"]) if st == "ok" else {}
               for s, d, st in zip(wins, win_dr, states["windows"])]
-    song_m = one(song_s, song_lag)
+    song_m = _song_lag_keys(one(song_s, song_lag))
     song_m["missing_windows"] = missing_windows
+    arc = [m.get("lufs_section_diff") for m in (sec_ms if secs else win_ms)]
+    song_m["lufs_section_diff"] = _mean(arc)
     return _assemble("mix", song_s, secs, wins, song_m, sec_ms, win_ms, states), win_dr
+
+
+def ranked_slices(parts: dict) -> list[dict]:
+    """Every scored (part, section) slice, lowest score first (stable, so the
+    first of equal scores wins): `[{part, label, score, a, b}]`.
+
+    The one rule for "worst" (Amendment 3), shared by the song's `worst`
+    and `report.worst_slices`: silent and missing parts are skipped (a
+    part never rebuilt is listed in the result's `missing` instead), and so
+    is any section whose score is None."""
+    out = []
+    for key, res in parts.items():
+        if res["silent"] or res["missing"]:
+            continue
+        for sec in res["sections"]:
+            if sec["score"] is not None:
+                out.append({"part": key, "label": sec["label"], "score": sec["score"],
+                            "a": sec["a"], "b": sec["b"]})
+    out.sort(key=lambda c: c["score"])
+    return out
 
 
 def _json_default(o):
@@ -673,7 +724,9 @@ def score_song(original: Path, stems_dir: Path, sc: Path, parts_dir: Path,
     - `cache_dir` holds the per-file tsumugi drum-voice cache (default: the
       MERT cache directory, `out/bench/cache`).
 
-    Returns `{song, duration, parts, mix, score, worst, drift, energy, files}`.
+    Returns `{song, duration, parts, mix, score, worst, missing, drift, energy,
+    files}`: `worst` is the worst *scored* section (`ranked_slices`, or None),
+    `missing` the parts whose active original was never rebuilt.
     """
     import json
 
@@ -737,21 +790,13 @@ def score_song(original: Path, stems_dir: Path, sc: Path, parts_dir: Path,
     mix.update({"type": "mix", "label": "Mix",
                 "files": {"original": str(original), "rebuild": str(rebuild_mix) if has_mix else None}})
 
-    worst = None
-    for key, res in parts.items():
-        if res["silent"]:
-            continue
-        if res["missing"]:
-            cand = {"part": key, "label": "not rebuilt", "score": 0.0, "a": 0.0, "b": duration}
-        elif res["worst"] is not None:
-            cand = {"part": key, **res["worst"]}
-        else:
-            continue
-        if worst is None or cand["score"] < worst["score"]:
-            worst = cand
+    ranked = ranked_slices(parts)
+    worst = ranked[0] if ranked else None
+    missing = [key for key, res in parts.items() if res["missing"]]
 
     result = {"song": original.stem, "duration": duration, "parts": parts, "mix": mix,
-              "score": song_score(parts, shares, mix), "worst": worst, "drift": drift,
+              "score": song_score(parts, shares, mix), "worst": worst, "missing": missing,
+              "drift": drift,
               "energy": shares,
               "sections": [{"label": s.label, "a": s.a, "b": s.b} for s in secs],
               "files": {"original": str(original), "sc": str(sc), "stems": str(stems_dir),

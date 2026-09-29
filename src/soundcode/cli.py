@@ -126,10 +126,15 @@ def main(argv: list[str] | None = None) -> int:
     p_score.add_argument("--stems", default=None, help="default out/stems/<original stem>")
     p_score.add_argument("--out", default=None, help="default out/score/<sc stem>")
 
-    p_bench = sub.add_parser("bench", help="run the benchmark set and update the run history")
+    p_bench = sub.add_parser("bench", help="run the benchmark set and update the run history",
+                             description="Run the benchmark set and update the run history. "
+                                         "Note: stages are cached by input mtime; after changing "
+                                         "encode/render code run with --force.")
     p_bench.add_argument("--tier", choices=("A", "B", "C", "all"), default="A")
     p_bench.add_argument("--label", default="")
-    p_bench.add_argument("--force", action="store_true")
+    p_bench.add_argument("--force", action="store_true",
+                         help="redo every stage (cut, separate, encode, render), ignoring the "
+                              "mtime cache")
     p_bench.add_argument("--calibrate", action="store_true",
                          help="re-measure the anchors (floor/ceiling) from tier A and exit")
 

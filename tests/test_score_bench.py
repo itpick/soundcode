@@ -664,7 +664,9 @@ def test_calibrate_never_writes_a_floor_looser_than_its_floor_cap(tmp_path, monk
     assert new["pitched"]["f0_cents"]["ceiling"] == pytest.approx(5.0)
     assert new["pitched"]["f0_cents"]["weight"] == 3
     assert new["pitched"]["f0_cents"]["floor_cap"] == 100                   # kept
+    assert new["pitched"]["f0_cents"]["floor_measured"] == pytest.approx(500.0)
     assert any("looser than its perceptual cap" in w for w in res["warnings"])
+    assert '"floor_cap": 100, "floor_measured": 500.0' in anchors_path.read_text()
 
 
 def test_calibrate_leaves_mix_and_sung_wer_manual_with_no_warning(tmp_path, monkeypatch):
@@ -862,3 +864,124 @@ def test_cli_score_renders_scores_and_prints_the_table(tmp_path, monkeypatch):
     assert (out_dir / "report.html").exists()
     assert "cache_dir" in seen and Path(seen["cache_dir"]).is_absolute()
     assert Path(seen["cache_dir"]) == (Path("out") / "bench" / "cache").resolve()
+
+
+# --------------------------------------------------------------------------
+# final-review fixes (Amendment 3 and the minor items)
+# --------------------------------------------------------------------------
+
+def _two_verse_result():
+    r = _mk_result("song-a", 60.0, {"piano": 50.0})
+    r["parts"]["piano"]["sections"] = [
+        {"label": "verse", "a": 0.0, "b": 12.0, "score": 40.0, "axes": {}, "metrics": {}},
+        {"label": "verse", "a": 72.0, "b": 84.0, "score": 90.0, "axes": {}, "metrics": {}}]
+    r["worst"] = {"part": "piano", "label": "verse", "score": 40.0, "a": 0.0, "b": 12.0}
+    r["missing"] = ["guitar"]
+    return r
+
+
+def test_history_stores_worst_missing_and_sections_keyed_by_label_at_time():
+    h = bench._song_history(_two_verse_result())
+    assert h["worst"] == {"part": "piano", "label": "verse", "score": 40.0, "a": 0.0, "b": 12.0}
+    assert h["missing"] == ["guitar"]
+    # two "verse"s no longer collapse into one key
+    assert h["parts"]["piano"]["sections"] == {"verse@0:00": 40.0, "verse@1:12": 90.0}
+
+
+def test_readme_lists_missing_parts_per_song():
+    line = {"date": "d1", "label": "cur", "commit": "c1", "tier": "A",
+            "songs": {"song-a": bench._song_history(_two_verse_result()),
+                      "song-b": bench._song_history(_mk_result("song-b", 70.0, {"piano": 70.0}))}}
+    readme = bench._render_readme([line])
+    rows = [ln for ln in readme.splitlines() if "**song**" in ln]
+    assert "missing: guitar" in rows[0] and "song-a" in rows[0]
+    assert "missing" not in rows[1]
+
+
+def test_readme_header_and_bench_help_carry_the_cache_note(capsys):
+    from soundcode import cli
+    note = "stages are cached by input mtime; after changing encode/render code run with --force"
+    assert note in bench._render_readme([])
+    with pytest.raises(SystemExit):
+        cli.main(["bench", "--help"])
+    assert note in " ".join(capsys.readouterr().out.split())
+
+
+def test_fmt_delta_takes_its_sign_from_the_rounded_delta():
+    assert bench._fmt_delta(70.0, 69.7) == " (+0)"          # -0.3 rounds to 0: not "(-0)"
+    assert bench._fmt_delta(70.0, 69.4) == " (-1)"
+    assert bench._fmt_delta(70.0, 71.2) == " (+1)"
+    assert bench._fmt_delta(None, 71.2) == ""
+
+
+def test_diff_reports_state_transitions_and_the_readme_shows_them():
+    prev = {"date": "d0", "label": "p", "commit": "c0", "tier": "A", "songs": {
+        "a": {"score": 70.0, "worst": None, "parts": {"piano": {"score": 37.0},
+                                                       "bass": {"score": None},
+                                                       "drums": {"score": None}}}}}
+    cur = {"date": "d1", "label": "c", "commit": "c1", "tier": "A", "songs": {
+        "a": {"score": 70.0, "worst": None, "parts": {"piano": {"score": None},
+                                                       "bass": {"score": 55.0},
+                                                       "drums": {"score": None}}}}}
+    d = bench.diff(prev, cur)
+    assert ("a", "piano", 37.0, None) in d                  # scored -> silent
+    assert ("a", "bass", None, 55.0) in d                   # silent -> scored
+    assert not any(p == "drums" for _, p, *_ in d)          # silent both times: no change
+    readme = bench._render_readme([prev, cur])
+    piano = [ln for ln in readme.splitlines() if ln.startswith("| a | piano |")][0]
+    assert "37 → —" in piano
+    assert "(-" not in readme.split("### Regressed")[1]      # transitions aren't +/- deltas
+
+
+def test_run_bench_prints_state_transitions(tmp_path, monkeypatch, capsys):
+    _mk_source(tmp_path, ENTRY_A)
+    monkeypatch.setattr(bench, "TIERS", {"A": [ENTRY_A]})
+    results = [_mk_result("song-a", 70.0, {"piano": 37.0}), _mk_result("song-a", 70.0, {"piano": 37.0})]
+    results[1]["parts"]["piano"].update(silent=True, song=None, sections=[])
+    monkeypatch.setattr(bench.scorer, "score_song", lambda *a, **k: results.pop(0))
+    run, _ = _fake_run()
+    bench.run_bench("A", "first", tmp_path, run=run)
+    bench.run_bench("A", "second", tmp_path, run=run)
+    assert "song-a piano 37 → —" in capsys.readouterr().out
+
+
+def test_update_anchor_stores_the_measured_floor_when_the_cap_applies():
+    old = {"floor": 300.0, "ceiling": 10.0, "weight": 3, "axis": "what", "floor_cap": 100}
+    w: list[str] = []
+    new = bench._update_anchor("vocal", "f0_cents", old, 5.0, 747.0, w)
+    assert new["floor"] == 100 and new["floor_measured"] == pytest.approx(747.0)
+    # a measured floor inside the cap is written as is, and a stale
+    # floor_measured from an earlier capped calibration is dropped
+    new2 = bench._update_anchor("vocal", "f0_cents", new, 5.0, 80.0, w)
+    assert new2["floor"] == pytest.approx(80.0) and "floor_measured" not in new2
+
+
+def test_update_anchor_degenerate_guard_compares_capped_spreads():
+    # the old anchor's *effective* spread is 100 - 0 = 100 (its 700 floor is
+    # capped); a measured 0..50 spread is 50% of that -- a real update, even
+    # though it is < 10% of the uncapped 700
+    old = {"floor": 700.0, "ceiling": 0.0, "weight": 1, "axis": "what", "floor_cap": 100}
+    w: list[str] = []
+    new = bench._update_anchor("drums", "lag_ms_abs", old, 0.0, 50.0, w)
+    assert new["floor"] == pytest.approx(50.0) and not w
+    # and the measured side is capped too: 0..9 is 9% of 100 -> degenerate
+    new = bench._update_anchor("drums", "lag_ms_abs", old, 0.0, 9.0, w)
+    assert new == old and any("degenerate" in x for x in w)
+
+
+def test_shipped_anchors_apply_their_floor_caps():
+    from soundcode.score import anchors
+    capped = 0
+    for part_type, metrics in anchors.ANCHORS.items():
+        for metric, a in metrics.items():
+            cap = a.get("floor_cap")
+            if cap is None:
+                assert "floor_measured" not in a, f"{part_type}.{metric}"
+                continue
+            assert a["floor"] <= cap, f"{part_type}.{metric}"
+            if "floor_measured" in a:
+                capped += 1
+                assert a["floor_measured"] > cap
+                assert a["floor"] == min(a["floor_measured"], cap)
+    assert capped >= 5
+    assert anchors.ANCHORS["vocal"]["f0_cents"]["floor_measured"] == pytest.approx(747.2572326660156)

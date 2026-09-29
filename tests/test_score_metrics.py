@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from soundcode.score import metrics  # noqa: E402
+from soundcode.score import metrics, scorer  # noqa: E402
 from soundcode.score.slices import Slice  # noqa: E402
 
 SR = 22050
@@ -108,8 +108,13 @@ def test_features_of_passes_f0_fmin_through_to_f0(monkeypatch):
         return np.full(400, 440.0), np.ones(400, bool)
 
     monkeypatch.setattr(metrics, "_f0", fake_f0)
-    metrics.Features.of(tone(440, 4.0), SR, pitched=False, f0=True, f0_fmin=30.0)
-    assert calls == [30.0]
+    metrics.Features.of(tone(440, 4.0), SR, pitched=False, f0=True, f0_fmin=scorer.BASS_F0_FMIN)
+    assert calls == [32.7]
+
+
+def test_bass_f0_fmin_is_crepes_lowest_bin_c1():
+    # Amendment 3: 30 Hz is below CREPE's first bin, so every bass f0 came back NaN
+    assert scorer.BASS_F0_FMIN == pytest.approx(32.7)
 
 
 def test_onset_f1_uses_a_narrower_window_than_compare_onset_f1():

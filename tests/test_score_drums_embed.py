@@ -307,3 +307,14 @@ def test_mert_chunking_matches_a_continuous_pass():
         assert fixed_cos >= 0.7, f"{label} (frame {idx_c}): fixed cosine {fixed_cos} below the floor"
         assert fixed_cos > naive_cos, \
             f"{label}: fixed ({fixed_cos}) should beat naive ({naive_cos})"
+
+
+def test_chunk_and_context_are_multiples_of_merts_320_sample_stride():
+    assert embed.MERT_STRIDE == 320
+    for s in (embed.CHUNK_S, embed.CONTEXT_S):
+        assert round(s * embed.TARGET_SR) % embed.MERT_STRIDE == 0
+    embed._check_stride(30.0, 1.0)                   # the shipped values pass
+    with pytest.raises(ValueError, match="320"):
+        embed._check_stride(30.0, 0.99)              # 23760 samples: not a stride multiple
+    with pytest.raises(ValueError, match="320"):
+        embed._check_stride(30.005, 1.0)

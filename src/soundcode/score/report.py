@@ -53,6 +53,16 @@ def _row(name: str, res: dict) -> str:
     return f"{name:<15}| {cells[0]:>5} | {cells[1]:>5} | {cells[2]:>5} | {cells[3]:>5} | {worst}"
 
 
+def _song_worst(result: dict) -> str:
+    """The song row's worst: its worst scored slice, then any parts never
+    rebuilt (Amendment 3), e.g. `piano verse @ 0:12 (41) · missing: guitar`."""
+    w = result.get("worst")
+    out = f"{w['part']} {w['label']} @ {_mmss(w.get('a'))} ({w['score']:.0f})" if w else "—"
+    if result.get("missing"):
+        out += f" · missing: {', '.join(result['missing'])}"
+    return out
+
+
 def table(result: dict) -> str:
     """Fixed-width `part | what | sound | dyn | score | worst (label @ m:ss)`
     rows, sorted by score ascending; `—` for silent parts, `not rebuilt` for
@@ -62,8 +72,7 @@ def table(result: dict) -> str:
     lines += [_row(name, res) for name, res in _part_rows(result)]
     lines.append("-" * len(head))
     lines.append(_row("mix", result["mix"]))
-    w = result.get("worst")
-    worst = f"{w['part']} {w['label']} @ {_mmss(w.get('a'))} ({w['score']:.0f})" if w else "—"
+    worst = _song_worst(result)
     lines.append(f"{'song':<15}| {'':>5} | {'':>5} | {'':>5} | {_num(result['score']):>5} | {worst}")
     return "\n".join(lines)
 
@@ -191,17 +200,12 @@ def _lag_series(result: dict) -> dict:
 
 
 def worst_slices(result: dict, n: int = N_WORST) -> list[dict]:
-    """The `n` lowest-scoring (part, section) slices over the scored parts."""
-    cands = []
-    for key, res in result["parts"].items():
-        if res["silent"] or res["missing"]:
-            continue
-        for s in res["sections"]:
-            if s["score"] is not None:
-                cands.append({"part": key, "label": s["label"], "score": s["score"],
-                              "a": s["a"], "b": s["b"], "files": res.get("files", {})})
-    cands.sort(key=lambda c: c["score"])
-    return cands[:n]
+    """The `n` lowest-scoring (part, section) slices over the scored parts --
+    `scorer.ranked_slices`, the same rule as the song's `worst`."""
+    from .scorer import ranked_slices
+
+    return [{**c, "files": result["parts"][c["part"]].get("files", {})}
+            for c in ranked_slices(result["parts"])[:n]]
 
 
 def _cut(src: Path, dst: Path, start: float, length: float) -> None:
@@ -296,9 +300,7 @@ def html(result: dict, out_dir: Path) -> Path:
                  "<th>score</th><th>original</th><th>rebuild</th></tr>" + "".join(rows) + "</table>"
                  if rows else "<p class=muted>no scored slices</p>")
 
-    w = result.get("worst")
-    worst_line = (f"worst: {_e(w['part'])} · {_e(w['label'])} @ {_e(_mmss(w.get('a')))} "
-                  f"({w['score']:.0f})" if w else "")
+    worst_line = f"worst: {_e(_song_worst(result))}"
     drifting = [k for k, wins in result.get("drift", {}).items() if any(x["drift"] for x in wins)]
     drift_line = (f"drift (|lag| &gt; {DRIFT_MS:.0f} ms) in: {_e(', '.join(drifting))}"
                   if drifting else "no drift over 30 ms")
