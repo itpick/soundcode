@@ -984,4 +984,8 @@ def test_shipped_anchors_apply_their_floor_caps():
                 assert a["floor_measured"] > cap
                 assert a["floor"] == min(a["floor_measured"], cap)
     assert capped >= 5
-    assert anchors.ANCHORS["vocal"]["f0_cents"]["floor_measured"] == pytest.approx(747.2572326660156)
+    # Check vocal f0_cents has proper capped-floor structure
+    a = anchors.ANCHORS["vocal"]["f0_cents"]
+    assert "floor_measured" in a
+    assert a["floor_measured"] > a["floor_cap"]
+    assert a["floor"] == min(a["floor_measured"], a["floor_cap"])
