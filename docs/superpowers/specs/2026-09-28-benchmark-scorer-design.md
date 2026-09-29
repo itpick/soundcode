@@ -95,6 +95,16 @@ The first real validation run failed on the off-key Discipline vocal: 70.8 again
 - **Pitch weighs more.** `f0_cents` weighs 3 in the vocal and bass What axes.
 - **Axes combine by a weighted geometric mean.** The part score is the weighted geometric mean of the axes (weights 0.4 / 0.4 / 0.2, renormalised over the axes that exist, each axis floored at 1). A part that fails one axis, such as wrong notes with the right voice, can no longer average out to "fine".
 
+### Amendment 2 (2026-09-29, after the first listening checkpoint)
+
+The worst full-Discipline slice ("keys intro, score 0") was a false alarm. The original keys stem is at −84 dBFS there, so both sides are silent. One loud 100 ms click was enough to count the whole section as active.
+
+**New rule.** A part is active in a slice when two things hold:
+- at least **10%** of its 100 ms frames are at or above −50 dBFS;
+- the slice RMS is ≥ −60 dBFS.
+
+The same rule decides "missing" on the rebuild side, and the whole-song silent/missing check. The worst-slice list only ranks slices where the original part is active under this rule.
+
 ## Benchmark set
 
 | Tier | Songs | Why |
