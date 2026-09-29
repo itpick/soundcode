@@ -41,7 +41,7 @@ def kit_bytes(doc) -> int:
     d = Path(s.meta["kit"])
     if not d.is_absolute() and getattr(doc, "path", None):
         d = Path(doc.path).parent / d
-    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.is_dir() else 0
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file() and not f.name.startswith("._")) if d.is_dir() else 0
 
 
 def sung(doc) -> bool:
@@ -218,7 +218,7 @@ def build(root: Path, site_dir: Path, work: Path, run=subprocess.run, force: boo
         for song in songs:
             slug, clip = song["slug"], root / song["clip"]
             stems_dir = root / default_out_dir(clip)
-            if not stems_dir.is_dir() or not any(stems_dir.glob("*.wav")):
+            if not stems_dir.is_dir() or not fsutil.wavs(stems_dir):
                 raise RuntimeError(f"{slug}: no separated stems in {stems_dir}; "
                                     f"run: soundcode separate {song['clip']}")
             sc, wav, log = work / f"{slug}.sc", work / f"{slug}.wav", work / f"{slug}.render.log"

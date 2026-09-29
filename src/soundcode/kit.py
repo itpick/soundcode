@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+from . import fsutil
+
 MAX_PER_VOICE = 4
 PRE_S, MAX_S, FADE_IN_S, FADE_OUT_S = 0.005, 0.6, 0.005, 0.02
 
@@ -62,7 +64,7 @@ def load(kit_dir: Path, sr: int) -> dict[str, list[np.ndarray]]:
     import soundfile as sf
 
     out: dict[str, list[np.ndarray]] = {}
-    for p in sorted(Path(kit_dir).glob("*.wav")):
+    for p in fsutil.wavs(kit_dir):
         voice = p.stem.rsplit("_", 1)[0]
         y, s = sf.read(str(p), always_2d=True)
         y = y.astype(np.float32)

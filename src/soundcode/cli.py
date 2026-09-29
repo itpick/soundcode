@@ -14,6 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import fsutil
 from .expand import build_grid, expand
 from .parser import ParseError, parse_file
 
@@ -264,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             parts_dir, rebuild = out_dir / "parts", out_dir / "rebuild.wav"
 
             doc = parse_file(str(sc_path))
-            cached = (rebuild.exists() and parts_dir.is_dir() and any(parts_dir.glob("*.wav"))
+            cached = (rebuild.exists() and parts_dir.is_dir() and fsutil.wavs(parts_dir)
                      and rebuild.stat().st_mtime >= sc_path.stat().st_mtime)
             if not cached:
                 import numpy as np

@@ -4,6 +4,9 @@ On exFAT (external drives), macOS keeps AppleDouble companions `._<name>` next t
 files, deleting them automatically when `<name>` is deleted. shutil.rmtree lists
 both, deletes the main file, then fails with FileNotFoundError on the already-vanished
 companion. This module provides rmtree() that tolerates such vanishing acts.
+
+AppleDouble files must also be filtered when reading directories; wavs() returns
+only actual WAV audio files, skipping AppleDouble companions and directories.
 """
 
 from __future__ import annotations
@@ -11,6 +14,24 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+
+
+def wavs(directory: str | Path) -> list[Path]:
+    """List WAV files in a directory, excluding AppleDouble companions.
+
+    Ignores files whose name starts with '._' (macOS AppleDouble format) and
+    directories. Returns paths sorted by their string representation.
+
+    Args:
+        directory: Directory to scan.
+
+    Returns:
+        Sorted list of Path objects for '*.wav' files, excluding companions.
+    """
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob("*.wav") if p.is_file() and not p.name.startswith("._"))
 
 
 def rmtree(path: str | Path) -> None:

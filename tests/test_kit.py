@@ -93,3 +93,25 @@ def test_render_reports_a_missing_kit(tmp_path, capsys):
     sc.write_text("%sc 0.3\n@duration 1.0\n\n:perc.drums inst=drums.kit\nmeta kit=gone.kit\n@0.2 kick 100\n")
     render_sf.render(parse_file(str(sc)), 44100, sf2=sf2)
     assert "gone.kit" in capsys.readouterr().err
+
+
+def test_kit_load_ignores_appledouble_companion_files(tmp_path):
+    """kit.load() ignores AppleDouble ._*.wav files (exFAT quirk)."""
+    kit_dir = tmp_path / "kit"
+    kit_dir.mkdir()
+    # Create real WAV files
+    sf.write(str(kit_dir / "hat_0.wav"), np.zeros((4410, 2), np.float32), SR)
+    sf.write(str(kit_dir / "kick_0.wav"), np.zeros((4410, 2), np.float32), SR)
+    # Create AppleDouble companion files (garbage that should be ignored)
+    (kit_dir / "._hat_0.wav").write_bytes(b"AppleDouble companion junk")
+    (kit_dir / "._kick_0.wav").write_bytes(b"AppleDouble companion junk")
+
+    # kit.load should ignore the ._*.wav files and load only real WAV files
+    samples = kit.load(kit_dir, SR)
+
+    assert "hat" in samples
+    assert "kick" in samples
+    assert len(samples["hat"]) == 1
+    assert len(samples["kick"]) == 1
+    assert samples["hat"][0].shape == (4410, 2)
+    assert samples["kick"][0].shape == (4410, 2)

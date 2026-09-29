@@ -143,7 +143,7 @@ def _run_separate(name: str, original: Path, stems_dir: Path, root: Path, force:
     but the stem sum check failed (a warning, not a crash). Exit code 1 with stems
     present and "sum check: FAILED" in stdout is treated as a warning; any other
     non-zero exit raises."""
-    if not (_stale(stems_dir, original, force) or not any(stems_dir.glob("*.wav"))):
+    if not (_stale(stems_dir, original, force) or not fsutil.wavs(stems_dir)):
         return 0.0, False
     t0 = time.monotonic()
     cmd = [sys.executable, "-m", "soundcode.cli", "separate", str(original), "-o", str(stems_dir)]
@@ -213,7 +213,7 @@ def prepare(entry: dict, root: Path, force: bool = False, run=subprocess.run) ->
         cmd = [sys.executable, "-m", "soundcode.cli", "render", str(sc), "--with-vocals",
                "--parts", str(parts_dir), "-o", str(rebuild)]
         _check(run(cmd, capture_output=True, text=True, cwd=root, env=env), name, "render")
-    if _stale(rebuild, sc, force) or not parts_dir.is_dir() or not any(parts_dir.glob("*.wav")):
+    if _stale(rebuild, sc, force) or not parts_dir.is_dir() or not fsutil.wavs(parts_dir):
         timed("render", _render)
     else:
         timing["render"] = 0.0

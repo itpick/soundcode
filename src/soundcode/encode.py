@@ -1017,7 +1017,7 @@ def _encode(src: Path, wd: Path, out_path: str | None, title: str | None,
             kit_dir = dest.with_suffix(".kit")
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.rmtree(kit_dir, ignore_errors=True)
-            shutil.copytree(st.kit_src, kit_dir)
+            shutil.copytree(st.kit_src, kit_dir, copy_function=shutil.copyfile)
             st.extra_meta["kit"] = kit_dir.name
 
     lines: list[str] = [
