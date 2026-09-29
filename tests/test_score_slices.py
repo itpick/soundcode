@@ -50,8 +50,51 @@ def test_sections_leave_a_gap_uncovered_between_struct_segments():
 def test_active_gate():
     sr = 8000
     y = np.zeros(sr * 4, np.float32)
-    y[sr:sr + 800] = 0.1                                # -20 dBFS burst in second 1
+    y[sr:sr + 800] = 0.1                                # -20 dBFS burst fills all of second 1
     assert slices.active(y, sr, 1.0, 2.0) and not slices.active(y, sr, 2.0, 4.0)
+
+
+def test_single_click_in_long_silence_is_not_active():
+    # Amendment 2: one loud 100 ms frame among ~200 in a 20 s slice is a
+    # false alarm (the Discipline keys-intro bug), not "active".
+    sr = 8000
+    dur = 20.0
+    n = int(sr * dur)
+    y = np.zeros(n, np.float32)
+    y[sr:sr + int(0.1 * sr)] = 1.0                      # one very loud 100 ms click
+    assert not slices.active(y, sr, 0.0, dur)
+
+
+def test_thirty_percent_loud_enough_is_active():
+    # 30% of the slice's 100 ms frames at -30 dBFS clears both the 10%
+    # min-fraction rule and the gate.
+    sr = 8000
+    dur = 20.0
+    frame = int(0.1 * sr)
+    n_frames = int(round(dur / 0.1))
+    amp = 10 ** (-30 / 20)
+    y = np.zeros(n_frames * frame, np.float32)
+    for i in range(n_frames):
+        if i % 10 < 3:                                  # 3 of every 10 frames: 30%
+            y[i * frame:(i + 1) * frame] = amp
+    assert slices.active(y, sr, 0.0, dur)
+
+
+def test_sustained_quiet_below_gate_is_not_active():
+    # Every frame is at -55 dBFS: below the -50 dBFS gate, so 0% of frames
+    # qualify, even though the slice isn't below the -60 dBFS floor either.
+    sr = 8000
+    dur = 20.0
+    n = int(sr * dur)
+    amp = 10 ** (-55 / 20)
+    y = np.full(n, amp, np.float32)
+    assert not slices.active(y, sr, 0.0, dur)
+
+
+def test_active_constants_match_the_amendment():
+    assert slices.GATE_DB == -50.0
+    assert slices.MIN_ACTIVE_FRACTION == pytest.approx(0.10)
+    assert slices.SLICE_FLOOR_DB == -60.0
 
 
 def test_lag_and_drift():

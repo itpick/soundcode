@@ -109,22 +109,47 @@ def sections(doc: Document, duration: float) -> list[Slice]:
     return out
 
 
-def active(y: np.ndarray, sr: int, a: float, b: float, gate_db: float = -50.0) -> bool:
-    """True if the loudest 100 ms RMS frame in [a, b) is >= gate_db dBFS."""
+# Amendment 2 (2026-09-29): a single loud 100 ms frame in an otherwise
+# silent slice ("keys intro, score 0" on full Discipline: the original
+# keys stem was at -84 dBFS there, but one click made the whole 25 s slice
+# count as active) is a false alarm, not activity. A slice is active only
+# when a real fraction of it is loud, and the slice as a whole isn't
+# effectively silent.
+GATE_DB = -50.0
+MIN_ACTIVE_FRACTION = 0.10
+SLICE_FLOOR_DB = -60.0
+
+
+def active(y: np.ndarray, sr: int, a: float, b: float, gate_db: float = GATE_DB,
+          min_fraction: float = MIN_ACTIVE_FRACTION, floor_db: float = SLICE_FLOOR_DB) -> bool:
+    """True iff the fraction of 100 ms frames in [a, b) with RMS >= gate_db
+    dBFS is >= min_fraction AND the whole slice's RMS is >= floor_db.
+
+    Both conditions are needed: the fraction rule alone would still call a
+    slice active if one enormous click also happened to be loud enough to
+    drag the whole-slice RMS up, and the floor rule alone would still call
+    a slice active if it were sustained but too quiet to be real signal.
+    """
     mono = _mono(y)
     i0 = max(int(a * sr), 0)
     i1 = min(int(b * sr), mono.shape[0])
     seg = mono[i0:i1]
     if seg.size == 0:
         return False
+    slice_rms = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)))
+    if slice_rms <= 0.0 or 20.0 * np.log10(slice_rms) < floor_db:
+        return False
     frame = max(int(round(0.1 * sr)), 1)
-    max_rms = 0.0
+    n_frames = 0
+    n_active = 0
     for start in range(0, seg.size, frame):
         chunk = seg[start:start + frame]
         if chunk.size == 0:
             continue
+        n_frames += 1
         rms = float(np.sqrt(np.mean(chunk.astype(np.float64) ** 2)))
-        max_rms = max(max_rms, rms)
-    if max_rms <= 0.0:
+        if rms > 0.0 and 20.0 * np.log10(rms) >= gate_db:
+            n_active += 1
+    if n_frames == 0:
         return False
-    return 20.0 * np.log10(max_rms) >= gate_db
+    return (n_active / n_frames) >= min_fraction

@@ -237,6 +237,30 @@ def test_section_dropout_scores_zero_and_leaves_the_others_alone(tmp_path, fakes
     assert res["parts"]["piano"]["song"]["missing_share"] == pytest.approx(14 / 40)
 
 
+def test_click_only_original_section_is_silent_not_missing(tmp_path, fakes):
+    # Discipline regression (Amendment 2, 2026-09-29): the original keys
+    # stem was silent in a section except for one loud click; the rebuild
+    # was genuinely silent there too, but the click alone made the section
+    # count as "active" under the old single-frame rule, so the silent
+    # rebuild scored 0 as "missing" and became the #1 worst slice -- a
+    # false alarm (silence vs silence). It must be "silent", not "missing",
+    # and left out of the worst-slice ranking.
+    orig = _piano()
+    orig[int(12 * SR):int(26 * SR)] = 0.0              # verse: silent in the original ...
+    click_i = int(19 * SR)
+    orig[click_i:click_i + int(0.1 * SR)] = 1.0         # ... except one loud 100 ms click
+    reb = _piano()
+    reb[int(12 * SR):int(26 * SR)] = 0.0                # the rebuild is genuinely silent there too
+    res = _song(tmp_path, {"piano": orig}, {"piano": reb})
+    intro, verse, chorus = res["parts"]["piano"]["sections"]
+    assert verse["label"] == "verse"
+    assert verse["silent"] and not verse["missing"] and verse["score"] is None
+    assert intro["score"] > 90 and chorus["score"] > 90
+    assert res["parts"]["piano"]["song"]["missing_share"] == pytest.approx(0.0)
+    worst = report.worst_slices(res)
+    assert worst and all(w["label"] != "verse" for w in worst)
+
+
 def test_json_default_turns_numpy_nan_into_null(tmp_path):
     assert json.loads(json.dumps({"x": np.float32("nan"), "y": np.float32(1.5)},
                                  default=scorer._json_default)) == {"x": None, "y": 1.5}
