@@ -105,6 +105,18 @@ The worst full-Discipline slice ("keys intro, score 0") was a false alarm. The o
 
 The same rule decides "missing" on the rebuild side, and the whole-song silent/missing check. The worst-slice list only ranks slices where the original part is active under this rule.
 
+### Amendment 3 (2026-09-29, final whole-branch review)
+
+- **Lag.** With a periodic onset envelope the cross-correlation peaks at every beat multiple, and a far peak can win by a hair.
+  - Per window: the lag is the **smallest-|lag| candidate whose correlation is within 0.05 of the maximum**, searched by FFT cross-correlation.
+  - Song-level: `lag_ms_abs` is the **median** |window lag|, not the mean.
+- **Bass pitch.** It is tracked from **32.7 Hz** (C1, the lowest bin of CREPE); 30 Hz is outside CREPE's range and produced no values.
+- **Mix loudness.**
+  - The whole-song `lufs_diff_abs` is a self-optimised gain offset: weight **0.1**, and it is reported raw.
+  - The mix Dyn axis adds **`lufs_section_diff`**: the mean |per-section LUFS difference| once the whole-song offset is removed, i.e. the dynamic arc. Anchors: floor 6 dB, ceiling 0.5 dB, weight 1.
+- **Worst spot.** A song's `worst` is its worst *scored* slice, the same rule as the report's worst-slice list. Parts that are never rebuilt are listed separately as `missing: [...]` in the table, history and README.
+- **Stage caching.** It is by input mtime, so a code change to encode or render needs `--force`. The CLI help and the README header say so.
+
 ## Benchmark set
 
 | Tier | Songs | Why |
