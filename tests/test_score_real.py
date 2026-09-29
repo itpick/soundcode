@@ -24,7 +24,7 @@ import soundfile as sf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from soundcode.score import align, scorer, slices  # noqa: E402
+from soundcode.score import align, anchors, scorer, slices  # noqa: E402
 from soundcode.score.metrics import SR  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +115,9 @@ def test_200ms_delayed_drums_are_flagged_drift_and_drop_what_by_30(tmp_path):
     assert drift, "no windows to check drift over"
     assert all(w["drift"] for w in drift), \
         f"not every window flagged as drift: {[(w['label'], w['lag_ms']) for w in drift]}"
+    # Amendment 3 (nearest peak): the true 200 ms, never a beat multiple
+    assert all(w["lag_ms"] is not None and abs(w["lag_ms"] - 200) <= 20 for w in drift), \
+        f"window lags not within 200 +/- 20 ms: {[(w['label'], w['lag_ms']) for w in drift]}"
 
     baseline = _score(drums_path, drums_path, "drums")
     delayed_result = _score(drums_path, delayed_path, "drums")
@@ -122,3 +125,56 @@ def test_200ms_delayed_drums_are_flagged_drift_and_drop_what_by_30(tmp_path):
     assert base_what is not None and delayed_what is not None
     assert base_what - delayed_what >= 30, \
         f"What dropped {base_what - delayed_what:.1f} (expected >= 30): {base_what} -> {delayed_what}"
+
+
+# --------------------------------------------------------------------------
+# Liveness (final review, Amendment 3): every anchored metric produces a
+# value, and the lag search is quiet on a stem against itself
+# --------------------------------------------------------------------------
+
+# metrics that need inputs a bare stem-vs-stem comparison doesn't have:
+# `sung_wer_excess` needs the song's lyrics (`doc`), never given here
+_NEEDS_DOC = {"sung_wer_excess"}
+
+
+def _active_stems(stems_dir: Path) -> list[tuple[str, Path]]:
+    out = []
+    for key in scorer.PART_TYPE:
+        if key == "mix":
+            continue
+        stem = stems_dir / f"{key}.wav"
+        if stem.is_file() and _is_active(stem):
+            out.append((key, stem))
+    return out
+
+
+@pytest.mark.skipif(not STEMS_DISCIPLINE_30S.is_dir(),
+                    reason="needs out/stems/discipline-30s (soundcode separate)")
+def test_every_anchored_metric_is_live_on_a_stem_against_itself():
+    stems = _active_stems(STEMS_DISCIPLINE_30S)
+    assert stems, "no active stems in out/stems/discipline-30s"
+    dead = []
+    for key, stem in stems:
+        m = scorer.part_metrics(stem, stem, key, drum_cache=CACHE_DIR)
+        for metric in anchors.ANCHORS[scorer.PART_TYPE[key]]:
+            if metric in _NEEDS_DOC:
+                continue
+            if m.get(metric) is None:
+                dead.append(f"{key}.{metric}")
+    assert not dead, f"anchored metrics with no value (stem against itself): {dead}"
+
+
+@pytest.mark.skipif(not STEMS_DISCIPLINE_30S.is_dir(),
+                    reason="needs out/stems/discipline-30s (soundcode separate)")
+def test_a_stem_against_itself_has_zero_median_lag_and_no_drift():
+    stems = _active_stems(STEMS_DISCIPLINE_30S)
+    assert stems, "no active stems in out/stems/discipline-30s"
+    for key, stem in stems:
+        y = scorer._load_mono(stem)
+        wins = slices.windows(y.shape[-1] / SR)
+        dr = align.drift(y, y, SR, wins)
+        lags = [abs(w["lag_ms"]) for w in dr if w["lag_ms"] is not None]
+        assert lags, f"{key}: no window produced a lag"
+        assert float(np.median(lags)) == 0.0, f"{key}: median |lag| {np.median(lags)} ms"
+        assert not any(w["drift"] for w in dr), \
+            f"{key}: drift flagged against itself: {[(w['label'], w['lag_ms']) for w in dr]}"
