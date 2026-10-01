@@ -132,6 +132,50 @@ def test_note_lines_pitched_and_drums():
     assert tsc.note_lines(d, GRID) == ["2:1.000 clap 96"]
 
 
+# --- velocity rescaling -----------------------------------------------------------------------
+
+def test_rescale_velocities_maps_p5_p95_to_40_120_rank_preserving():
+    vels = list(range(25, 36))                                    # 25..35, 11 notes
+    t = tsc.Track("piano", "keys.piano", [(float(i), float(i) + 0.5, 60, v)
+                                          for i, v in enumerate(vels)])
+    tsc.rescale_velocities([t])
+    got = [v for _, _, _, v in t.notes]
+    assert min(got) >= 40 - 5 and max(got) <= 120 + 5             # near the 40..120 spread
+    assert got == sorted(got)                                     # order (rank) kept
+    assert len(set(got)) > 1                                      # not flattened
+
+
+def test_rescale_velocities_flattens_a_flat_or_tiny_stream_to_90():
+    t = tsc.Track("piano", "keys.piano", [(float(i), float(i) + 0.5, 60, 80) for i in range(10)])
+    tsc.rescale_velocities([t])
+    assert all(v == 90 for _, _, _, v in t.notes)
+
+    few = tsc.Track("piano", "keys.piano", [(0.0, 0.5, 60, 20), (1.0, 1.5, 60, 100)])
+    tsc.rescale_velocities([few])
+    assert all(v == 90 for _, _, _, v in few.notes)              # fewer than 5 notes
+
+
+def test_rescale_velocities_clamps_outliers_to_1_127():
+    vels = [1] + list(range(40, 50)) + [127]
+    t = tsc.Track("drums", "drums.kit.standard", [(float(i), float(i) + 0.1, 39, v)
+                                                  for i, v in enumerate(vels)])
+    tsc.rescale_velocities([t])
+    got = [v for _, _, _, v in t.notes]
+    assert all(1 <= v <= 127 for v in got)
+    assert got[0] < got[-1]                                       # order kept end to end
+
+
+def test_rescale_velocities_spans_several_tracks_in_one_stream():
+    """A drum stream is several Track objects (one per voice) joined by the
+    encoder into one `:perc.drums` stream; the stats are over all of them."""
+    a = tsc.Track("drums", "drums.kit.standard", [(0.0, 0.1, 36, v) for v in range(20, 40)])
+    b = tsc.Track("drums", "drums.kit.standard", [(1.0, 1.1, 38, v) for v in range(60, 80)])
+    tsc.rescale_velocities([a, b])
+    all_v = [v for t in (a, b) for _, _, _, v in t.notes]
+    assert min(all_v) >= 1 and max(all_v) <= 127
+    assert all_v == sorted(all_v)                                 # a's low notes stay below b's
+
+
 def test_bleed_tracks_are_dropped_with_a_reason():
     big = tsc.Track("piano", "keys.piano", [(i, i + 0.5, 60, 90) for i in range(200)])
     tiny = tsc.Track("strings", "strings.ensemble", [(0, 0.9, 60, 90), (1, 2, 62, 90)])

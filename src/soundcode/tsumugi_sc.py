@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 from . import gm
 from .pitch import cents_to_name
 
@@ -45,6 +47,33 @@ def position(t: float, grid: dict) -> str:
     beats = round(beats, 3)
     bar, beat = divmod(beats, BEATS_PER_BAR)
     return f"{int(bar) + 1}:{beat + 1:.3f}"
+
+
+def rescale_velocities(tracks: list[Track]) -> None:
+    """Rescale one stream's velocities so they mean dynamics instead of
+    following the stem's absolute loudness (a quiet stem's notes all read as
+    soft, a loud one's all as loud, so the SoundFont plays the wrong dynamic
+    layer). `tracks` is every Track that makes up one `.sc` stream -- for
+    drums that is every voice sharing the one `perc.drums` stream.
+
+    The stream's own 5th-95th percentile velocity maps linearly onto 40-120
+    (clamped to 1-127); a linear map of a monotonic input is itself
+    monotonic, so plain rounding already preserves rank. A stream too small
+    or too flat to have a meaningful spread maps every note to 90 -- `meta
+    level` still carries the stream's overall loudness, unchanged here."""
+    locs = [(ti, ni) for ti, t in enumerate(tracks) for ni in range(len(t.notes))]
+    if not locs:
+        return
+    vels = np.array([tracks[ti].notes[ni][3] for ti, ni in locs], dtype=np.float64)
+    p5, p95 = np.percentile(vels, 5), np.percentile(vels, 95)
+    if len(vels) < 5 or (p95 - p5) < 4:
+        new_vels = np.full(len(vels), 90)
+    else:
+        scaled = 40 + (vels - p5) / (p95 - p5) * 80
+        new_vels = np.clip(np.round(scaled), 1, 127).astype(int)
+    for (ti, ni), nv in zip(locs, new_vels):
+        s, e, p, _ = tracks[ti].notes[ni]
+        tracks[ti].notes[ni] = (s, e, p, int(nv))
 
 
 def note_lines(track: Track, grid: dict) -> list[str]:

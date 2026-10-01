@@ -683,6 +683,7 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
                        stem="drums", level_db=level)
             st.header_fields = {"inst": "drums.kit"}
             st.warns += why
+            tsc.rescale_velocities(tracks)
             for t in tracks:
                 st.lines += tsc.note_lines(t, grid)
             st.ok = bool(st.lines)
@@ -737,6 +738,7 @@ def stage_tsumugi(stems: dict[str, Path], mix_path: Path, mix: np.ndarray, sr: i
             if decision.warn:
                 st.warns.append(decision.warn)
             st.warns += why
+            tsc.rescale_velocities([t])            # one stream == this one track
             st.lines = tsc.note_lines(t, grid)
             st.ok = bool(st.lines)
             stages.append(st)
