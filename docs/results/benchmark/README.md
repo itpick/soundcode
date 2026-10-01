@@ -5,64 +5,62 @@ Regenerated after every `soundcode bench` run (spec 2026-09-28-benchmark-scorer)
 Note: stages are cached by input mtime; after changing encode/render code run with --force.
 
 ## Tier A
-_last run: 2026-09-29-0500 — final (commit 560557e)_
+_last run: 2026-09-30-2214 — control-main-same-stems (commit b7dcc0c)_
 
 | song | part | what | sound | dyn | score | change |
 |---|---|---|---|---|---|---|
-| river-30s | **song** (missing: backing_vocals) | | | | 81 | (+11) |
-| river-30s | lead_vocals | 84 | 88 | 58 | 79 | (+4) |
+| river-30s | **song** (missing: backing_vocals) | | | | 81 | (-1) |
+| river-30s | lead_vocals | 83 | 88 | 60 | 79 | (+0) |
 | river-30s | backing_vocals | — | — | — | 0 | (+0) |
-| river-30s | piano | 64 | 59 | 76 | 64 | (-1) |
-| river-30s | guitar | 85 | 69 | 58 | 72 | (+7) |
+| river-30s | piano | 63 | 59 | 75 | 63 | (-1) |
+| river-30s | guitar | 86 | 68 | 58 | 72 | (+0) |
 | river-30s | bass | — | — | — | — | |
-| river-30s | drums | 78 | 62 | 70 | 70 | (-1) |
+| river-30s | drums | 80 | 53 | 72 | 67 | (-3) |
 | river-30s | other | — | — | — | — | |
-| discipline-30s | **song** (missing: backing_vocals) | | | | 81 | (+16) |
-| discipline-30s | lead_vocals | 85 | 64 | 67 | 73 | (+0) |
+| discipline-30s | **song** (missing: backing_vocals) | | | | 81 | (+0) |
+| discipline-30s | lead_vocals | 81 | 63 | 66 | 70 | (-2) |
 | discipline-30s | backing_vocals | — | — | — | 0 | (+0) |
-| discipline-30s | piano | 61 | 43 | 83 | 56 | (-1) |
-| discipline-30s | guitar | 64 | 66 | 34 | 57 | (-2) |
-| discipline-30s | bass | 90 | 61 | 67 | 73 | (+8) |
-| discipline-30s | drums | 83 | 61 | 91 | 75 | (-1) |
+| discipline-30s | piano | 36 | 25 | 48 | 33 | (-23) |
+| discipline-30s | guitar | 64 | 68 | 26 | 54 | (-2) |
+| discipline-30s | bass | 92 | 64 | 68 | 75 | (+2) |
+| discipline-30s | drums | 77 | 67 | 90 | 75 | (+1) |
 | discipline-30s | other | — | — | — | — | |
-| lights_in_the_sky-30s | **song** | | | | 78 | (+9) |
-| lights_in_the_sky-30s | lead_vocals | 76 | 60 | 55 | 65 | (+0) |
+| lights_in_the_sky-30s | **song** | | | | 72 | (-7) |
+| lights_in_the_sky-30s | lead_vocals | 78 | 61 | 56 | 66 | (+1) |
 | lights_in_the_sky-30s | backing_vocals | — | — | — | — | |
-| lights_in_the_sky-30s | piano | 82 | 56 | 75 | 69 | (-2) |
+| lights_in_the_sky-30s | piano | 55 | 47 | 71 | 54 | (-15) |
 | lights_in_the_sky-30s | guitar | — | — | — | — | |
 | lights_in_the_sky-30s | bass | — | — | — | — | |
 | lights_in_the_sky-30s | drums | — | — | — | — | |
-| lights_in_the_sky-30s | other | 41 | 47 | 65 | 48 | (-1) |
-| 999999-30s | **song** | | | | 43 | (+12) |
-| 999999-30s | lead_vocals | 81 | 22 | 59 | 45 | (+5) |
+| lights_in_the_sky-30s | other | 39 | 50 | 76 | 49 | (+2) |
+| 999999-30s | **song** | | | | 53 | (+10) |
+| 999999-30s | lead_vocals | 82 | 23 | 59 | 46 | (+1) |
 | 999999-30s | backing_vocals | — | — | — | — | |
 | 999999-30s | piano | — | — | — | — | |
 | 999999-30s | guitar | — | — | — | — | |
-| 999999-30s | bass | 60 | 6 | 53 | 23 | (-18) |
+| 999999-30s | bass | 72 | 13 | 52 | 34 | (+11) |
 | 999999-30s | drums | — | — | — | — | |
-| 999999-30s | other | 48 | 55 | 10 | 37 | (+5) |
-| corona_radiata-30s | **song** (missing: backing_vocals) | | | | 55 | (+11) |
+| 999999-30s | other | 47 | 55 | 0 | 23 | (-14) |
+| corona_radiata-30s | **song** (missing: backing_vocals) | | | | 48 | (-7) |
 | corona_radiata-30s | lead_vocals | — | — | — | — | |
 | corona_radiata-30s | backing_vocals | — | — | — | 0 | (+0) |
 | corona_radiata-30s | piano | — | — | — | — | |
-| corona_radiata-30s | guitar | 24 | 17 | 10 | 18 | (-1) |
-| corona_radiata-30s | bass | 81 | 31 | 50 | 50 | (+11) |
+| corona_radiata-30s | guitar | 21 | 6 | 7 | 10 | (-8) |
+| corona_radiata-30s | bass | 66 | 43 | 61 | 54 | (+4) |
 | corona_radiata-30s | drums | — | — | — | — | |
-| corona_radiata-30s | other | 37 | 56 | 10 | 34 | (-2) |
+| corona_radiata-30s | other | 42 | 56 | 8 | 34 | (+0) |
 
 ### Improved (≥ +5)
-- discipline-30s song: 66 → 81 (+16)
-- 999999-30s song: 31 → 43 (+12)
-- corona_radiata-30s song: 44 → 55 (+11)
-- corona_radiata-30s bass: 39 → 50 (+11)
-- river-30s song: 71 → 81 (+11)
-- lights_in_the_sky-30s song: 70 → 78 (+9)
-- discipline-30s bass: 65 → 73 (+8)
-- river-30s guitar: 66 → 72 (+7)
-- 999999-30s other: 32 → 37 (+5)
+- 999999-30s bass: 23 → 34 (+11)
+- 999999-30s song: 43 → 53 (+10)
 
 ### Regressed (≤ −5)
-- 999999-30s bass: 41 → 23 (-18)
+- discipline-30s piano: 56 → 33 (-23)
+- lights_in_the_sky-30s piano: 69 → 54 (-15)
+- 999999-30s other: 37 → 23 (-14)
+- corona_radiata-30s guitar: 18 → 10 (-8)
+- corona_radiata-30s song: 55 → 48 (-7)
+- lights_in_the_sky-30s song: 78 → 72 (-7)
 
 ## Tier C
 _last run: 2026-09-29-0546 — final (commit 560557e)_
