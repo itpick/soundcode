@@ -14,6 +14,28 @@ from soundcode import kit  # noqa: E402
 from soundcode.parser import parse, parse_file  # noqa: E402
 
 SR = 44100
+K40_AT_0P4S = -np.log(10 ** (-40 / 20)) / 0.4    # exp decay rate: -40 dB at 0.4 s
+K40_AT_1P2S = -np.log(10 ** (-40 / 20)) / 1.2    # a slower, more cymbal/snare-like ring
+
+
+def _decaying_hit(onset_s: float, dur_s: float, sr: int, k: float, seed: int) -> tuple[int, np.ndarray]:
+    """A broadband decaying one-shot: stereo noise times exp(-k*t)."""
+    n = int(dur_s * sr)
+    t = np.arange(n) / sr
+    rng = np.random.default_rng(seed)
+    noise = rng.standard_normal((n, 2)).astype(np.float32)
+    env = np.exp(-k * t).astype(np.float32)[:, None]
+    return int(onset_s * sr), noise * env
+
+
+def _add(y: np.ndarray, i: int, seg: np.ndarray) -> None:
+    m = min(len(seg), len(y) - i)
+    if m > 0:
+        y[i:i + m] += seg[:m]
+
+
+def _rms_db(a: np.ndarray) -> float:
+    return 20 * np.log10(np.sqrt(np.mean(a.astype(np.float64) ** 2)) + 1e-12)
 
 
 def test_isolated_hits_skip_crowded_ones_and_prefer_typical_velocity():
@@ -81,6 +103,96 @@ def test_render_uses_the_kit_and_falls_back_when_it_is_gone(tmp_path):
 def test_simultaneous_hits_crowd_each_other():
     got = kit.isolated([(1.0, "kick", 100), (1.0, "hat", 60), (3.0, "kick", 90)])
     assert got.get("kick") == [3.0] and "hat" not in got
+
+
+def test_isolated_prefers_the_long_free_gap_over_typical_velocity():
+    """A hit followed by a full target-length gap is kept over one closer to
+    the voice's median velocity but boxed in by the next hit (spec: 'prefer
+    hits followed by a gap of at least the voice's target length')."""
+    hits = [(0.5, "snare", 100), (0.8, "hat", 60),     # 0.5: only a 0.3 s gap
+            (2.0, "snare", 40), (2.8, "hat", 60)]       # 2.0: a 0.8 s gap (>= 0.6 s target)
+    assert kit.isolated(hits)["snare"] == [2.0]
+
+
+def test_isolated_falls_back_to_the_longest_gap_when_none_is_long_enough():
+    """When no hit of a voice has a clean target-length gap (e.g. hats on
+    every eighth, no pause anywhere), fall back to the longest gap there is."""
+    hits = [(0.0, "kick", 100), (0.3, "kick", 90), (0.6, "kick", 80),
+            (0.65, "snare", 50)]
+    # kick@0.0 -> gap 0.3; kick@0.3 -> gap 0.3; none reach the 0.5 s target,
+    # so the longest (either, both 0.3) wins over picking by velocity alone.
+    got = kit.isolated(hits)
+    assert set(got["kick"]) <= {0.0, 0.3}
+    assert 0.6 not in got.get("kick", [])        # crowded by the snare 50 ms later
+
+
+def test_voice_target_lengths_match_the_brief():
+    assert kit.target_length_s("kick") == 0.5
+    assert kit.target_length_s("snare") == 0.6
+    assert kit.target_length_s("clap") == 0.6
+    assert kit.target_length_s("hat") == 0.25
+    assert kit.target_length_s("hat.open") == 1.5
+    assert kit.target_length_s("crash") == 1.5
+    assert kit.target_length_s("ride") == 1.5
+    assert kit.target_length_s("tom.hi") == 0.8
+    assert kit.target_length_s("tom.floor.lo") == 0.8
+    assert kit.target_length_s("cowbell") == 0.6       # anything else
+
+
+def test_snare_sample_rings_past_the_hat_grid_without_a_discontinuity(tmp_path):
+    """A snare boxed in by a hat 0.3 s later (closer than its 0.6 s target)
+    used to be chopped mid-ring; it should now be extended to the target
+    length with a decay that continues smoothly past the real cut."""
+    dur = 2.5
+    y = np.zeros((int(dur * SR), 2), np.float32)
+    hits = []
+    # a dense hat grid (every 0.23 s, per the brief) with one gap left around
+    # the snare -- exactly the "snare-only bars" case the fix targets.
+    for i, h in enumerate(list(np.arange(0.0, 0.70, 0.23)) + list(np.arange(1.3, dur, 0.23))):
+        i0, seg = _decaying_hit(float(h), 0.1, SR, k=40.0, seed=100 + i)
+        _add(y, i0, seg)
+        hits.append((round(float(h), 3), "hat", 70))
+    onset = 1.0
+    i0, seg = _decaying_hit(onset, 1.0, SR, k=K40_AT_1P2S, seed=1)
+    _add(y, i0, seg)
+    hits.append((onset, "snare", 100))
+
+    stem = tmp_path / "drums.wav"
+    sf.write(str(stem), y, SR)
+    made = kit.build(stem, hits, tmp_path / "kit")
+    assert "snare" in made and len(made["snare"]) == 1
+    out, sr = sf.read(str(made["snare"][0]))
+    assert sr == SR
+    assert len(out) >= int(0.5 * SR)                 # extended well past the 0.3 s cut
+
+    nxt_hat = min(t for t, v, _ in hits if v == "hat" and t > onset)
+    target_s = kit.target_length_s("snare")
+    join = (int(min(nxt_hat - kit.PRE_S, onset + target_s) * SR) -
+           int(max(0, onset - kit.PRE_S) * SR))
+    w = int(0.05 * SR)
+    before, after = out[join - w:join], out[join:join + w]
+    assert abs(_rms_db(before) - _rms_db(after)) < 3.0
+
+
+def test_already_quiet_tail_is_not_force_extended(tmp_path):
+    """A hit that has already decayed below the -40 dB floor by the time it
+    is cut isn't padded out with manufactured ringing -- chopping silence
+    isn't audible, so the short sample is kept as-is."""
+    dur = 1.0
+    y = np.zeros((int(dur * SR), 2), np.float32)
+    i0, seg = _decaying_hit(0.0, 1.0, SR, k=K40_AT_0P4S, seed=7)
+    _add(y, i0, seg)
+    # the next hit (any voice) comes 0.5 s later -- the kick's own target --
+    # but by then its envelope has long passed -40 dB (reached at 0.4 s).
+    hits = [(0.0, "kick", 100), (0.5, "hat", 70)]
+
+    stem = tmp_path / "drums.wav"
+    sf.write(str(stem), y, SR)
+    made = kit.build(stem, hits, tmp_path / "kit")
+    assert "kick" in made
+    out, sr = sf.read(str(made["kick"][0]))
+    target_n = int(kit.target_length_s("kick") * SR)
+    assert len(out) < target_n                   # not padded out to the target
 
 
 def test_render_reports_a_missing_kit(tmp_path, capsys):
