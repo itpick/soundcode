@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>soundcode browser encoder (spike)</title>
+<style>
+  :root { --bg:#fbfbfa; --fg:#1d1d1b; --muted:#6b6b66; --line:#deddd8; --accent:#2b6cb0; --ok:#2f7d4f; --bad:#b0412b; --code:#f1f0ec; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --fg:#e8e7e3; --muted:#9a9993; --line:#33332f; --accent:#7aa7e0; --ok:#6cc18f; --bad:#e58a73; --code:#1f1f1d; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px; text-align: center; color: var(--muted); cursor: pointer; }
+  #drop.over { border-color: var(--accent); color: var(--fg); }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; align-items: end; }
+  label { display: flex; flex-direction: column; font-size: .85rem; color: var(--muted); gap: 4px; }
+  input[type=text], select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); min-width: 180px; }
+  label.check { flex-direction: row; align-items: center; color: var(--fg); }
+  button { font: inherit; padding: 7px 16px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); }
+  pre, textarea { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border: 1px solid var(--line); border-radius: 8px; padding: 12px; width: 100%; color: var(--fg); }
+  #log { max-height: 260px; overflow: auto; white-space: pre-wrap; }
+  textarea { height: 420px; resize: vertical; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  td, th { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+  td.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .bad { color: var(--bad); } .ok { color: var(--ok); }
+  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>soundcode: browser encoder (spike)</h1>
+  <p class="sub">Song in, <code>.sc</code> out. Everything runs in this page (essentia.js, basic-pitch, Whisper through transformers.js). Nothing is uploaded; models download from public CDNs on first use.</p>
+
+  <div id="drop" tabindex="0">Drop an audio file here, or click to choose one<input id="file" type="file" accept="audio/*" hidden></div>
+
+  <div class="row">
+    <label>Title (for LRCLIB) <input id="title" type="text" placeholder="optional"></label>
+    <label>Artist <input id="artist" type="text" placeholder="optional"></label>
+    <label>Backend
+      <select id="backend"><option value="auto">auto (WebGPU if available)</option><option value="wasm">WASM / CPU only</option></select>
+    </label>
+    <label>Whisper model
+      <select id="model">
+        <option value="onnx-community/whisper-base_timestamped">whisper-base (timestamped)</option>
+        <option value="local:whisper-base_timestamped">whisper-base, local copy in models/</option>
+        <option value="onnx-community/whisper-tiny_timestamped">whisper-tiny (timestamped)</option>
+        <option value="onnx-community/whisper-small_timestamped">whisper-small (timestamped)</option>
+      </select>
+    </label>
+    <label class="check"><input id="lrclib" type="checkbox" checked>&nbsp;Look up lyrics on LRCLIB</label>
+    <button id="go" disabled>Encode</button>
+  </div>
+
+  <h2>Progress</h2>
+  <pre id="log">Choose a file to start.</pre>
+
+  <h2>Timings</h2>
+  <table id="timings"><tbody><tr><td class="muted">—</td></tr></tbody></table>
+
+  <h2>Output</h2>
+  <div class="row"><button id="dl" class="ghost" disabled>Download .sc</button></div>
+  <textarea id="out" readonly spellcheck="false"></textarea>
+</main>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
